@@ -1,30 +1,29 @@
 #include <iostream>
 #include "../linenoise.hpp"
 
-using namespace linenoise_core;
 using namespace std;
 
 int main(int argc, const char** argv)
 {
     const auto history_path = "history.txt";
 
-    linenoiseSetCompletionCallback([](const char* buf, linenoiseCompletions& lc) {
-        if (buf[0] == 'h') {
-            lc.push_back("hello");
-            lc.push_back("hello there");
+    linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
+        if (editBuffer[0] == 'h') {
+            completions.push_back("hello");
+            completions.push_back("hello there");
         }
     });
     
-    linenoiseSetMultiLine(true);
+    linenoise::SetMultiLine(true);
 
-    linenoiseHistorySetMaxLen(4);
-    linenoiseHistoryLoad(history_path);
+    linenoise::SetHistoryMaxLen(4);
+    linenoise::LoadHistory(history_path);
 
     std::string line;
-    while (!(line = linenoise("hello> ")).empty()) {
+    while (!(line = linenoise::Readline("hello> ")).empty()) {
         cout <<  "echo: '" << line << "'" << endl;
-        linenoiseHistoryAdd(line.c_str());
-        linenoiseHistorySave(history_path);
+        linenoise::AddHistory(line.c_str());
+        linenoise::SaveHistory(history_path);
     }
 
     return 0;

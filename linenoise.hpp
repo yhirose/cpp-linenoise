@@ -136,7 +136,6 @@
 #ifndef STDOUT_FILENO
 #define STDOUT_FILENO 1
 #endif
-#define strdup _strdup
 #define snprintf _snprintf
 #define isatty _isatty
 #define write win32_write
@@ -153,12 +152,9 @@
 #include <fstream>
 #include <vector>
 
-namespace linenoise_core {
+namespace linenoise {
 
-typedef std::vector<std::string> linenoiseCompletions;
-
-//typedef void(linenoiseCompletionCallback)(const char*, linenoiseCompletions&);
-typedef std::function<void (const char*, linenoiseCompletions&)> linenoiseCompletionCallback;
+typedef std::function<void (const char*, std::vector<std::string>&)> CompletionCallback;
 
 #ifdef _WIN32
 
@@ -1063,7 +1059,7 @@ inline int win32_write(int fd, const void *buffer, unsigned int count) {
 #define LINENOISE_DEFAULT_HISTORY_MAX_LEN 100
 #define LINENOISE_MAX_LINE 4096
 static const char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
-static linenoiseCompletionCallback completionCallback;
+static CompletionCallback completionCallback;
 
 #ifndef _WIN32
 static struct termios orig_termios; /* In order to restore at exit.*/
@@ -1113,14 +1109,14 @@ enum KEY_ACTION {
     BACKSPACE =  127    /* Backspace */
 };
 
-static void linenoiseAtExit(void);
-int linenoiseHistoryAdd(const char *line);
-static void refreshLine(struct linenoiseState *l);
+void linenoiseAtExit(void);
+bool AddHistory(const char *line);
+void refreshLine(struct linenoiseState *l);
 
 /* ======================= Low level terminal handling ====================== */
 
 /* Set if to use or not the multi line mode. */
-inline void linenoiseSetMultiLine(int ml) {
+inline void SetMultiLine(int ml) {
     mlmode = ml;
 }
 
@@ -1304,7 +1300,7 @@ inline void linenoiseBeep(void) {
  * The state of the editing is encapsulated into the pointed linenoiseState
  * structure as described in the structure definition. */
 inline int completeLine(struct linenoiseState *ls) {
-    linenoiseCompletions lc;
+    std::vector<std::string> lc;
     int nread, nwritten;
     char c = 0;
 
@@ -1360,7 +1356,7 @@ inline int completeLine(struct linenoiseState *ls) {
 }
 
 /* Register a callback function to be called for tab-completion. */
-void linenoiseSetCompletionCallback(linenoiseCompletionCallback fn) {
+void SetCompletionCallback(CompletionCallback fn) {
     completionCallback = fn;
 }
 
@@ -1532,7 +1528,7 @@ void linenoiseEditMoveRight(struct linenoiseState *l) {
 }
 
 /* Move cursor to the start of the line. */
-void linenoiseEditMoveHome(struct linenoiseState *l) {
+inline void linenoiseEditMoveHome(struct linenoiseState *l) {
     if (l->pos != 0) {
         l->pos = 0;
         refreshLine(l);
@@ -1540,7 +1536,7 @@ void linenoiseEditMoveHome(struct linenoiseState *l) {
 }
 
 /* Move cursor to the end of the line. */
-void linenoiseEditMoveEnd(struct linenoiseState *l) {
+inline void linenoiseEditMoveEnd(struct linenoiseState *l) {
     if (l->pos != l->len) {
         l->pos = l->len;
         refreshLine(l);
@@ -1551,8 +1547,7 @@ void linenoiseEditMoveEnd(struct linenoiseState *l) {
  * entry as specified by 'dir'. */
 #define LINENOISE_HISTORY_NEXT 0
 #define LINENOISE_HISTORY_PREV 1
-void linenoiseEditHistoryNext(struct linenoiseState *l, int dir) {
-    //if (history_len > 1) {
+inline void linenoiseEditHistoryNext(struct linenoiseState *l, int dir) {
     if (history.size() > 1) {
         /* Update the current history entry before to
          * overwrite it with the next one. */
@@ -1575,7 +1570,7 @@ void linenoiseEditHistoryNext(struct linenoiseState *l, int dir) {
 
 /* Delete the character at the right of the cursor without altering the cursor
  * position. Basically this is what happens with the "Delete" keyboard key. */
-void linenoiseEditDelete(struct linenoiseState *l) {
+inline void linenoiseEditDelete(struct linenoiseState *l) {
     if (l->len > 0 && l->pos < l->len) {
         memmove(l->buf+l->pos,l->buf+l->pos+1,l->len-l->pos-1);
         l->len--;
@@ -1585,7 +1580,7 @@ void linenoiseEditDelete(struct linenoiseState *l) {
 }
 
 /* Backspace implementation. */
-void linenoiseEditBackspace(struct linenoiseState *l) {
+inline void linenoiseEditBackspace(struct linenoiseState *l) {
     if (l->pos > 0 && l->len > 0) {
         memmove(l->buf+l->pos-1,l->buf+l->pos,l->len-l->pos);
         l->pos--;
@@ -1597,7 +1592,7 @@ void linenoiseEditBackspace(struct linenoiseState *l) {
 
 /* Delete the previosu word, maintaining the cursor at the start of the
  * current word. */
-void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
+inline void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
     size_t old_pos = l->pos;
     size_t diff;
 
@@ -1642,7 +1637,7 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
 
     /* The latest history entry is always our current buffer, that
      * initially is just an empty string. */
-    linenoiseHistoryAdd("");
+    AddHistory("");
 
     if (write(l.ofd,prompt,l.prompt.length()) == -1) return -1;
     while(1) {
@@ -1825,7 +1820,7 @@ inline std::string linenoiseRaw(const char *prompt) {
  * for a blacklist of stupid terminals, and later either calls the line
  * editing function or uses dummy fgets() so that you will be able to type
  * something even in the most desperate of the conditions. */
-std::string linenoise(const char *prompt) {
+inline std::string Readline(const char *prompt) {
     if (isUnsupportedTerm()) {
         printf("%s",prompt);
         fflush(stdout);
@@ -1851,39 +1846,40 @@ inline void linenoiseAtExit(void) {
  * histories, but will work well for a few hundred of entries.
  *
  * Using a circular buffer is smarter, but a bit more complex to handle. */
-int linenoiseHistoryAdd(const char *line) {
+inline bool AddHistory(const char* line) {
     char *linecopy;
 
-    if (history_max_len == 0) return 0;
+    if (history_max_len == 0) return false;
 
     /* Don't add duplicated lines. */
-    if (!history.empty() && history.back() == line) return 0;
+    if (!history.empty() && history.back() == line) return false;
 
     /* If we reached the max length, remove the older line. */
     if (history.size() == history_max_len) {
         history.erase(history.begin());
     }
     history.push_back(line);
-    return 1;
+
+    return true;
 }
 
 /* Set the maximum length for the history. This function can be called even
  * if there is already some history, the function will make sure to retain
  * just the latest 'len' elements if the new history length value is smaller
  * than the amount of items already inside the history. */
-int linenoiseHistorySetMaxLen(int len) {
-    if (len < 1) return 0;
+inline bool SetHistoryMaxLen(size_t len) {
+    if (len < 1) return false;
     history_max_len = len;
     if (len < history.size()) {
         history.resize(len);
     }
-    return 1;
+    return true;
 }
 
 /* Save the history in the specified file. On success *true* is returned
  * otherwise *false* is returned. */
-bool linenoiseHistorySave(const char *filename) {
-    std::ofstream f(filename); // TODO: need 'std::ios::binary'?
+inline bool SaveHistory(const char* path) {
+    std::ofstream f(path); // TODO: need 'std::ios::binary'?
     if (!f) return false;
     for (const auto& h: history) {
         f << h << std::endl;
@@ -1896,12 +1892,12 @@ bool linenoiseHistorySave(const char *filename) {
  *
  * If the file exists and the operation succeeded *true* is returned, otherwise
  * on error *false* is returned. */
-bool linenoiseHistoryLoad(const char *filename) {
-    std::ifstream f(filename);
+inline bool LoadHistory(const char* path) {
+    std::ifstream f(path);
     if (!f) return false;
     std::string line;
     while (std::getline(f, line)) {
-        linenoiseHistoryAdd(line.c_str());
+        AddHistory(line.c_str());
     }
     return true;
 }
@@ -1909,7 +1905,6 @@ bool linenoiseHistoryLoad(const char *filename) {
 } // namespace linenoise
 
 #ifdef _WIN32
-#undef strdup
 #undef snprintf
 #undef isatty
 #undef write
