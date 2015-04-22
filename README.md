@@ -55,35 +55,6 @@ while (true) {
 // Save history
 linenoise::SaveHistory(path);
 ```
-Use C++ wrapper class
-
-```c++
-// The constructor will load history from the file.
-linenoise::LineNoise ln("history.txt", 4 /* history max len */);
-
-ln.SetMultiLine(true);
-
-ln.SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
-    if (editBuffer[0] == 'h') {
-        completions.push_back("hello");
-        completions.push_back("hello there");
-    }
-});
-
-while (true) {
-    auto line = ln.Readline("hello> ");
-
-    if (line.empty()) {
-        break;
-    }
-
-    cout <<  "echo: '" << line << "'" << endl;
-
-    ln.AddHistory(line.c_str());
-}
-
-// The destructor will save history to the file.
-```
 
 API
 ---
@@ -106,6 +77,8 @@ bool LoadHistory(const char* path);
 bool SaveHistory(const char* path);
 
 bool AddHistory(const char* line);
+
+const std::vector<std::string>& GetHistory();
 ```
 
 License

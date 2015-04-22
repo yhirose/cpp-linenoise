@@ -1902,42 +1902,9 @@ inline bool LoadHistory(const char* path) {
     return true;
 }
 
-class LineNoise {
-public:
-    LineNoise() = default;
-
-    LineNoise(const char* path, size_t len = 100) : path_(path) {
-        if (!path_.empty()) {
-            linenoise::SetHistoryMaxLen(len);
-            linenoise::LoadHistory(path_.c_str());
-        }
-    }
-
-    ~LineNoise() {
-        if (!path_.empty()) {
-            linenoise::SaveHistory(path_.c_str());
-        }
-    }
-
-    std::string Readline(const char *prompt) {
-        return linenoise::Readline(prompt);
-    }
-
-    bool AddHistory(const char* line) {
-        return linenoise::AddHistory(line);
-    }
-
-    void SetMultiLine(bool ml) {
-        linenoise::SetMultiLine(ml);
-    }
-
-    void SetCompletionCallback(linenoise::CompletionCallback fn) {
-        linenoise::SetCompletionCallback(fn);
-    }
-
-private:
-    std::string path_;
-};
+inline const std::vector<std::string>& GetHistory() {
+    return history;
+}
 
 } // namespace linenoise
 
