@@ -7,6 +7,12 @@ int main(int argc, const char** argv)
 {
     const auto path = "history.txt";
 
+    // Enable the multi-line mode
+    linenoise::SetMultiLine(true);
+
+    // Set max length of the history
+    linenoise::SetHistoryMaxLen(4);
+
     // Setup completion words every time when a user types
     linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
         if (editBuffer[0] == 'h') {
@@ -14,12 +20,6 @@ int main(int argc, const char** argv)
             completions.push_back("hello there");
         }
     });
-
-    // Enable the multi-line mode
-    linenoise::SetMultiLine(true);
-
-    // Set max length of the history
-    linenoise::SetHistoryMaxLen(4);
 
     // Load history
     linenoise::LoadHistory(path);
