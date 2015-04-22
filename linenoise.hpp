@@ -152,6 +152,7 @@
 #include <fstream>
 #include <functional>
 #include <vector>
+#include <iostream>
 
 namespace linenoise {
 
