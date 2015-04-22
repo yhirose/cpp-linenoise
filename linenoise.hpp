@@ -150,6 +150,7 @@
 #include <sys/types.h>
 #include <string>
 #include <fstream>
+#include <functional>
 #include <vector>
 
 namespace linenoise {
@@ -1116,7 +1117,7 @@ void refreshLine(struct linenoiseState *l);
 /* ======================= Low level terminal handling ====================== */
 
 /* Set if to use or not the multi line mode. */
-inline void SetMultiLine(int ml) {
+inline void SetMultiLine(bool ml) {
     mlmode = ml;
 }
 
@@ -1557,7 +1558,7 @@ inline void linenoiseEditHistoryNext(struct linenoiseState *l, int dir) {
         if (l->history_index < 0) {
             l->history_index = 0;
             return;
-        } else if (l->history_index >= history.size()) {
+        } else if (l->history_index >= (int)history.size()) {
             l->history_index = history.size()-1;
             return;
         }
@@ -1847,8 +1848,6 @@ inline void linenoiseAtExit(void) {
  *
  * Using a circular buffer is smarter, but a bit more complex to handle. */
 inline bool AddHistory(const char* line) {
-    char *linecopy;
-
     if (history_max_len == 0) return false;
 
     /* Don't add duplicated lines. */
