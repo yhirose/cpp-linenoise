@@ -3,7 +3,7 @@ cpp-linenoise
 
 Multi-platfrom (Unix, Windows) C++ header-only linenoise library.
 
-This library just gathered code from following excellent libraries, clean it up, and put it into a C++ header file for convenience.
+This library gathered code from following excellent libraries, clean it up, and put it into a C++ header file for convenience.
 
  * `linenoise.h` and `linenose.c` ([antirez/linenoise](https://github.com/antirez/linenoise))
  * `ANSI.c` ([adoxa/ansicon](https://github.com/adoxa/ansicon))
@@ -14,9 +14,70 @@ The licenses for the libraries are included in `linenoise.hpp`.
 Usage
 -----
 
-  1. Include `linenoise.hpp` in your project.
+```c++
+#include "linenoise.hpp"
 
-See the [example.cpp]() to see how to use the library.
+...
+
+const auto path = "history.txt";
+
+// Setup completion words every time when a user types
+linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
+    if (editBuffer[0] == 'h') {
+        completions.push_back("hello");
+        completions.push_back("hello there");
+    }
+});
+
+// Enable the multi-line mode
+linenoise::SetMultiLine(true);
+
+// Set max length of the history
+linenoise::SetHistoryMaxLen(4);
+
+// Load history
+linenoise::LoadHistory(path);
+
+while (true) {
+    // Read line
+    auto line = linenoise::Readline("hello> ");
+
+    if (line.empty()) {
+        break;
+    }
+
+    cout <<  "echo: '" << line << "'" << endl;
+
+    // Add text to history
+    linenoise::AddHistory(line.c_str());
+}
+
+// Save history
+linenoise::SaveHistory(path);
+```
+
+API
+---
+
+```c++
+namespace linenoise;
+
+std::string Readline(const char* prompt);
+
+void SetMultiLine(bool multiLineMode);
+
+typedef std::function<void (const char* editBuffer, std::vector<std::string>& completions)> CompletionCallback;
+
+void SetCompletionCallback(CompletionCallback fn);
+
+bool SetHistoryMaxLen(size_t len);
+
+bool LoadHistory(const char* path);
+
+bool SaveHistory(const char* path);
+
+bool AddHistory(const char* line);
+```
 
 License
 -------

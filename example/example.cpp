@@ -5,25 +5,40 @@ using namespace std;
 
 int main(int argc, const char** argv)
 {
-    const auto history_path = "history.txt";
+    const auto path = "history.txt";
 
+    // Setup completion words every time when a user types
     linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
         if (editBuffer[0] == 'h') {
             completions.push_back("hello");
             completions.push_back("hello there");
         }
     });
-    
+
+    // Enable the multi-line mode
     linenoise::SetMultiLine(true);
 
+    // Set max length of the history
     linenoise::SetHistoryMaxLen(4);
-    linenoise::LoadHistory(history_path);
 
-    std::string line;
-    while (!(line = linenoise::Readline("hello> ")).empty()) {
+    // Load history
+    linenoise::LoadHistory(path);
+
+    while (true) {
+        // Read line
+        auto line = linenoise::Readline("hello> ");
+
+        if (line.empty()) {
+            break;
+        }
+
         cout <<  "echo: '" << line << "'" << endl;
+
+        // Add line to history
         linenoise::AddHistory(line.c_str());
-        linenoise::SaveHistory(history_path);
+
+        // Save history
+        linenoise::SaveHistory(path);
     }
 
     return 0;
