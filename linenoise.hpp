@@ -128,6 +128,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #else
+#define NOMINMAX
 #include <Windows.h>
 #include <io.h>
 #ifndef STDIN_FILENO
