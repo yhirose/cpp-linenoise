@@ -137,7 +137,6 @@
 #ifndef STDOUT_FILENO
 #define STDOUT_FILENO 1
 #endif
-#define snprintf _snprintf
 #define isatty _isatty
 #define write win32_write
 #define read _read
