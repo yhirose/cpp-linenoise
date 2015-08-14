@@ -81,6 +81,12 @@ bool AddHistory(const char* line);
 const std::vector<std::string>& GetHistory();
 ```
 
+Tested compilers
+----------------
+
+  * Visual Studio 2015
+  * Clang 3.5
+
 License
 -------
 
