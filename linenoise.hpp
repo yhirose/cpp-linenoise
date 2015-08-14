@@ -1233,11 +1233,7 @@ inline int getCursorPosition(int ifd, int ofd) {
 
     /* Parse it. */
     if (buf[0] != ESC || buf[1] != '[') return -1;
-#ifdef _WIN32
-    if (sscanf_s(buf+2,"%d;%d",&rows,&cols) != 2) return -1;
-#else
-    if (sscanf(buf + 2, "%d;%d", &rows, &cols) != 2) return -1;
-#endif
+    if (sscanf(buf+2,"%d;%d",&rows,&cols) != 2) return -1;
     return cols;
 }
 
@@ -1349,11 +1345,7 @@ inline int completeLine(struct linenoiseState *ls) {
                 default:
                     /* Update buffer and return */
                     if (i < lc.size()) {
-#ifdef _WIN32
-                        nwritten = _snprintf_s(ls->buf, ls->buflen, _TRUNCATE,"%s", &lc[i][0]);
-#else
-                        nwritten = snprintf(ls->buf, ls->buflen, "%s", &lc[i][0]);
-#endif
+                        nwritten = snprintf(ls->buf,ls->buflen,"%s",&lc[i][0]);
                         ls->len = ls->pos = nwritten;
                     }
                     stop = 1;
@@ -1395,28 +1387,16 @@ inline void refreshSingleLine(struct linenoiseState *l) {
     }
 
     /* Cursor to left edge */
-#ifdef _WIN32
-    _snprintf_s(seq, 64, _TRUNCATE, "\r");
-#else
-    snprintf(seq, 64, "\r");
-#endif
+    snprintf(seq,64,"\r");
     ab += seq;
     /* Write the prompt and the current buffer content */
     ab += l->prompt;
     ab.append(buf, len);
     /* Erase to right */
-#ifdef _WIN32
-    _snprintf_s(seq,64,_TRUNCATE,"\x1b[0K");
-#else
-    snprintf(seq, 64, "\x1b[0K");
-#endif
+    snprintf(seq,64,"\x1b[0K");
     ab += seq;
     /* Move cursor to original position. */
-#ifdef _WIN32
-    _snprintf_s(seq, 64, _TRUNCATE, "\r\x1b[%dC", (int)(pos + plen));
-#else
-    snprintf(seq, 64, "\r\x1b[%dC", (int)(pos + plen));
-#endif
+    snprintf(seq,64,"\r\x1b[%dC", (int)(pos+plen));
     ab += seq;
     if (write(fd,ab.c_str(),ab.length()) == -1) {} /* Can't recover from write error. */
 }
@@ -1442,30 +1422,18 @@ inline void refreshMultiLine(struct linenoiseState *l) {
     /* First step: clear all the lines used before. To do so start by
      * going to the last row. */
     if (old_rows-rpos > 0) {
-#ifdef _WIN32
-        _snprintf_s(seq,64,_TRUNCATE,"\x1b[%dB", old_rows-rpos);
-#else
-        snprintf(seq, 64, "\x1b[%dB", old_rows - rpos);
-#endif
+        snprintf(seq,64,"\x1b[%dB", old_rows-rpos);
         ab += seq;
     }
 
     /* Now for every row clear it, go up. */
     for (j = 0; j < old_rows-1; j++) {
-#ifdef _WIN32
-       _snprintf_s(seq, 64, _TRUNCATE, "\r\x1b[0K\x1b[1A");
-#else
-       snprintf(seq, 64, "\r\x1b[0K\x1b[1A");
-#endif
+        snprintf(seq,64,"\r\x1b[0K\x1b[1A");
         ab += seq;
     }
 
     /* Clean the top line. */
-#ifdef _WIN32
-    _snprintf_s(seq, 64, _TRUNCATE, "\r\x1b[0K");
-#else
-    snprintf(seq, 64, "\r\x1b[0K");
-#endif
+    snprintf(seq,64,"\r\x1b[0K");
     ab += seq;
 
     /* Write the prompt and the current buffer content */
@@ -1479,11 +1447,7 @@ inline void refreshMultiLine(struct linenoiseState *l) {
         (l->pos+plen) % l->cols == 0)
     {
         ab += "\n";
-#ifdef _WIN32
-        _snprintf_s(seq, 64, _TRUNCATE, "\r");
-#else
-        snprintf(seq, 64, "\r");
-#endif
+        snprintf(seq,64,"\r");
         ab += seq;
         rows++;
         if (rows > (int)l->maxrows) l->maxrows = rows;
@@ -1494,28 +1458,16 @@ inline void refreshMultiLine(struct linenoiseState *l) {
 
     /* Go up till we reach the expected positon. */
     if (rows-rpos2 > 0) {
-#ifdef _WIN32
-       _snprintf_s(seq, 64, _TRUNCATE, "\x1b[%dA", rows - rpos2);
-#else
-       snprintf(seq, 64, "\x1b[%dA", rows - rpos2);
-#endif
+        snprintf(seq,64,"\x1b[%dA", rows-rpos2);
         ab += seq;
     }
 
     /* Set column. */
     col = (plen+(int)l->pos) % (int)l->cols;
     if (col)
-#ifdef _WIN32
-       _snprintf_s(seq, 64, _TRUNCATE, "\r\x1b[%dC", col);
-#else
-       snprintf(seq, 64, "\r\x1b[%dC", col);
-#endif
+        snprintf(seq,64,"\r\x1b[%dC", col);
     else
-#ifdef _WIN32
-       _snprintf_s(seq, 64, _TRUNCATE, "\r");
-#else
-       snprintf(seq, 64, "\r");
-#endif
+        snprintf(seq,64,"\r");
     ab += seq;
 
     l->oldpos = l->pos;
@@ -1612,11 +1564,7 @@ inline void linenoiseEditHistoryNext(struct linenoiseState *l, int dir) {
             return;
         }
         memset(l->buf, 0, l->buflen);
-#ifdef _WIN32
-        strcpy_s(l->buf, l->buflen, history[history.size() - 1 - l->history_index].c_str());
-#else
-        strcpy(l->buf, history[history.size() - 1 - l->history_index].c_str());
-#endif
+        strcpy(l->buf,history[history.size() - 1 - l->history_index].c_str());
         l->len = l->pos = strlen(l->buf);
         refreshLine(l);
     }
