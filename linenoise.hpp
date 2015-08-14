@@ -189,12 +189,12 @@ const char SI = '\x0F';  // Shift In
 
 const size_t MAX_ARG = 16;  // max number of args in an escape sequence
 int   state;                // automata state
-TCHAR prefix;               // escape sequence prefix ( '[', ']' or '(' );
-TCHAR prefix2;              // secondary prefix ( '?' or '>' );
-TCHAR suffix;               // escape sequence suffix
+WCHAR prefix;               // escape sequence prefix ( '[', ']' or '(' );
+WCHAR prefix2;              // secondary prefix ( '?' or '>' );
+WCHAR suffix;               // escape sequence suffix
 int   es_argc;              // escape sequence args count
 int   es_argv[MAX_ARG];     // escape sequence args
-TCHAR Pt_arg[MAX_PATH * 2]; // text parameter for Operating System Command
+WCHAR Pt_arg[MAX_PATH * 2]; // text parameter for Operating System Command
 int   Pt_len;
 BOOL  shifted;
 
@@ -308,7 +308,7 @@ inline void FlushBuffer(void)
 {
     DWORD nWritten;
     if (nCharInBuffer <= 0) return;
-    WriteConsole(hConOut, ChBuffer, nCharInBuffer, &nWritten, NULL);
+    WriteConsoleW(hConOut, ChBuffer, nCharInBuffer, &nWritten, NULL);
     nCharInBuffer = 0;
 }
 
@@ -327,11 +327,11 @@ inline void PushBuffer(WCHAR c)
 }
 
 //-----------------------------------------------------------------------------
-//   SendSequence( LPTSTR seq )
+//   SendSequence( LPWSTR seq )
 // Send the string to the input buffer.
 //-----------------------------------------------------------------------------
 
-inline void SendSequence(LPTSTR seq)
+inline void SendSequence(LPWSTR seq)
 {
     DWORD out;
     INPUT_RECORD in;
@@ -410,10 +410,10 @@ inline void InterpretEscSeq(void)
                                 case 39:
                                 case 49:
                                         {
-                                        TCHAR def[4];
+                                        WCHAR def[4];
                                         int   a;
                                         *def = '7'; def[1] = '\0';
-                                        GetEnvironmentVariable(L"ANSICON_DEF", def, lenof(def));
+                                        GetEnvironmentVariableW(L"ANSICON_DEF", def, lenof(def));
                                         a = wcstol(def, NULL, 16);
                                         grm.reverse = FALSE;
                                         if (a < 0)
@@ -758,7 +758,7 @@ inline void InterpretEscSeq(void)
 
                             case 6:     // ESC[6n Report cursor position
                                     {
-                                    TCHAR buf[32];
+                                    WCHAR buf[32];
                                     swprintf(buf, L"\33[%d;%dR", Info.dwCursorPosition.Y + 1,
                                         Info.dwCursorPosition.X + 1);
                                     SendSequence(buf);
@@ -773,8 +773,8 @@ inline void InterpretEscSeq(void)
                     if (es_argc != 1) return;
                     if (es_argv[0] == 21)   // ESC[21t Report xterm window's title
                         {
-                        TCHAR buf[MAX_PATH * 2];
-                        DWORD len = GetConsoleTitle(buf + 3, lenof(buf) - 3 - 2);
+                        WCHAR buf[MAX_PATH * 2];
+                        DWORD len = GetConsoleTitleW(buf + 3, lenof(buf) - 3 - 2);
                         // Too bad if it's too big or fails.
                         buf[0] = ESC;
                         buf[1] = ']';
@@ -798,7 +798,7 @@ inline void InterpretEscSeq(void)
 
         if (es_argc == 1 && es_argv[0] == 0) // ESC]0;titleST
             {
-            SetConsoleTitle(Pt_arg);
+            SetConsoleTitleW(Pt_arg);
             }
         }
 }
@@ -1909,7 +1909,6 @@ inline const std::vector<std::string>& GetHistory() {
 } // namespace linenoise
 
 #ifdef _WIN32
-#undef snprintf
 #undef isatty
 #undef write
 #undef read
