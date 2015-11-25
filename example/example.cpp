@@ -16,8 +16,13 @@ int main(int argc, const char** argv)
     // Setup completion words every time when a user types
     linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
         if (editBuffer[0] == 'h') {
+#ifdef _WIN32
+            completions.push_back("hello こんにちは");
+            completions.push_back("hello こんにちは there");
+#else
             completions.push_back("hello");
             completions.push_back("hello there");
+#endif
         }
     });
 
@@ -26,7 +31,11 @@ int main(int argc, const char** argv)
 
     while (true) {
         // Read line
+#ifdef _WIN32
         auto line = linenoise::Readline("hello> ");
+#else
+        auto line = linenoise::Readline("\033[32mこんにちは\x1b[0m> ");
+#endif
 
         if (line.empty()) {
             break;
