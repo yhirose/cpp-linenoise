@@ -2261,7 +2261,8 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
 
 /* This function calls the line editing function linenoiseEdit() using
  * the STDIN file descriptor set in raw mode. */
-inline std::string linenoiseRaw(const char *prompt) {
+inline std::string linenoiseRaw(const char *prompt, bool& quit) {
+    quit = false;
     std::string line;
 
     if (!isatty(STDIN_FILENO)) {
@@ -2269,11 +2270,15 @@ inline std::string linenoiseRaw(const char *prompt) {
         std::getline(std::cin, line);
     } else {
         /* Interactive editing. */
-        if (enableRawMode(STDIN_FILENO) == false) return line;
+        if (enableRawMode(STDIN_FILENO) == false) {
+            return line;
+        }
 
         char buf[LINENOISE_MAX_LINE];
         auto count = linenoiseEdit(STDIN_FILENO, STDOUT_FILENO, buf, LINENOISE_MAX_LINE, prompt);
-        if (count != -1) {
+        if (count == -1) {
+            quit = true;
+        } else {
             line.assign(buf, count);
         }
 
@@ -2288,7 +2293,8 @@ inline std::string linenoiseRaw(const char *prompt) {
  * for a blacklist of stupid terminals, and later either calls the line
  * editing function or uses dummy fgets() so that you will be able to type
  * something even in the most desperate of the conditions. */
-inline std::string Readline(const char *prompt) {
+inline std::string Readline(const char *prompt, bool& quit) {
+    quit = false;
     if (isUnsupportedTerm()) {
         printf("%s",prompt);
         fflush(stdout);
@@ -2296,8 +2302,13 @@ inline std::string Readline(const char *prompt) {
         std::getline(std::cin, line);
         return line;
     } else {
-        return linenoiseRaw(prompt);
+        return linenoiseRaw(prompt, quit);
     }
+}
+
+inline std::string Readline(const char *prompt) {
+    bool quit; // dummy
+    return Readline(prompt, quit);
 }
 
 /* ================================ History ================================= */

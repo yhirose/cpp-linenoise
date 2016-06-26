@@ -31,13 +31,14 @@ int main(int argc, const char** argv)
 
     while (true) {
         // Read line
+        bool quit;
 #ifdef _WIN32
-        auto line = linenoise::Readline("hello> ");
+        auto line = linenoise::Readline("hello> ", quit);
 #else
-        auto line = linenoise::Readline("\033[32mこんにちは\x1b[0m> ");
+        auto line = linenoise::Readline("\033[32mこんにちは\x1b[0m> ", quit);
 #endif
 
-        if (line.empty()) {
+        if (quit) {
             break;
         }
 
