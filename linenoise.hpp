@@ -2261,9 +2261,8 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
 
 /* This function calls the line editing function linenoiseEdit() using
  * the STDIN file descriptor set in raw mode. */
-inline std::string linenoiseRaw(const char *prompt, bool& quit) {
-    quit = false;
-    std::string line;
+inline bool linenoiseRaw(const char *prompt, std::string& line) {
+    bool quit = false;
 
     if (!isatty(STDIN_FILENO)) {
         /* Not a tty: read from file / pipe. */
@@ -2271,7 +2270,7 @@ inline std::string linenoiseRaw(const char *prompt, bool& quit) {
     } else {
         /* Interactive editing. */
         if (enableRawMode(STDIN_FILENO) == false) {
-            return line;
+            return quit;
         }
 
         char buf[LINENOISE_MAX_LINE];
@@ -2285,7 +2284,7 @@ inline std::string linenoiseRaw(const char *prompt, bool& quit) {
         disableRawMode(STDIN_FILENO);
         printf("\n");
     }
-    return line;
+    return quit;
 }
 
 /* The high level function that is the main API of the linenoise library.
@@ -2293,17 +2292,21 @@ inline std::string linenoiseRaw(const char *prompt, bool& quit) {
  * for a blacklist of stupid terminals, and later either calls the line
  * editing function or uses dummy fgets() so that you will be able to type
  * something even in the most desperate of the conditions. */
-inline std::string Readline(const char *prompt, bool& quit) {
-    quit = false;
+inline bool Readline(const char *prompt, std::string& line) {
     if (isUnsupportedTerm()) {
         printf("%s",prompt);
         fflush(stdout);
-        std::string line;
         std::getline(std::cin, line);
-        return line;
+        return false;
     } else {
-        return linenoiseRaw(prompt, quit);
+        return linenoiseRaw(prompt, line);
     }
+}
+
+inline std::string Readline(const char *prompt, bool& quit) {
+    std::string line;
+    quit = Readline(prompt, line);
+    return line;
 }
 
 inline std::string Readline(const char *prompt) {
