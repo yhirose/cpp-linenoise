@@ -1823,7 +1823,6 @@ void SetCompletionCallback(CompletionCallback fn) {
  * cursor position, and number of columns of the terminal. */
 inline void refreshSingleLine(struct linenoiseState *l) {
     char seq[64];
-    size_t plen = l->prompt.length();
     size_t pcolwid = unicodeColumnPos(l->prompt.c_str(), l->prompt.length());
     int fd = l->ofd;
     char *buf = l->buf;
