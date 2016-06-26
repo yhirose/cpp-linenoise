@@ -40,9 +40,10 @@ linenoise::LoadHistory(path);
 
 while (true) {
     // Read line
-    auto line = linenoise::Readline("hello> ");
+    std::string line;
+    auto quit = linenoise::Readline("hello> ", line);
 
-    if (line.empty()) {
+    if (quit) {
         break;
     }
 
