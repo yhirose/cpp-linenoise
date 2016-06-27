@@ -1754,10 +1754,10 @@ inline void linenoiseBeep(void) {
  *
  * The state of the editing is encapsulated into the pointed linenoiseState
  * structure as described in the structure definition. */
-inline int completeLine(struct linenoiseState *ls) {
+inline int completeLine(struct linenoiseState *ls, char *cbuf, int *c) {
     std::vector<std::string> lc;
-    int nread, nwritten;
-    char c = 0;
+    int nread = 0, nwritten;
+    *c = 0;
 
     completionCallback(ls->buf,lc);
     if (lc.empty()) {
@@ -1780,12 +1780,21 @@ inline int completeLine(struct linenoiseState *ls) {
                 refreshLine(ls);
             }
 
-            nread = read(ls->ifd,&c,1);
+            //nread = read(ls->ifd,&c,1);
+#ifdef _WIN32
+            nread = win32read(&c);
+            if (nread == 1) {
+                cbuf[0] = *c;
+            }
+#else
+            nread = unicodeReadUTF8Char(ls->ifd,cbuf,c);
+#endif
             if (nread <= 0) {
-                return -1;
+                *c = -1;
+                return nread;
             }
 
-            switch(c) {
+            switch(*c) {
                 case 9: /* tab */
                     i = (i+1) % (lc.size()+1);
                     if (i == lc.size()) linenoiseBeep();
@@ -1807,7 +1816,7 @@ inline int completeLine(struct linenoiseState *ls) {
         }
     }
 
-    return c; /* Return last read character */
+    return nread;
 }
 
 /* Register a callback function to be called for tab-completion. */
@@ -2123,7 +2132,7 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
          * there was an error reading from fd. Otherwise it will return the
          * character that should be handled next. */
         if (c == 9 && completionCallback != NULL) {
-            c = completeLine(&l);
+            nread = completeLine(&l,cbuf,&c);
             /* Return on errors */
             if (c < 0) return l.len;
             /* Read next character when 0 */
