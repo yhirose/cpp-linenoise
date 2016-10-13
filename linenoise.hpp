@@ -1782,7 +1782,7 @@ inline int completeLine(struct linenoiseState *ls, char *cbuf, int *c) {
 
             //nread = read(ls->ifd,&c,1);
 #ifdef _WIN32
-            nread = win32read(&c);
+            nread = win32read(c);
             if (nread == 1) {
                 cbuf[0] = *c;
             }
