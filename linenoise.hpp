@@ -761,7 +761,7 @@ inline void InterpretEscSeq(void)
                             case 6:     // ESC[6n Report cursor position
                                     {
                                     WCHAR buf[32];
-                                    swprintf(buf, L"\33[%d;%dR", Info.dwCursorPosition.Y + 1,
+                                    swprintf(buf, 32, L"\33[%d;%dR", Info.dwCursorPosition.Y + 1,
                                         Info.dwCursorPosition.X + 1);
                                     SendSequence(buf);
                                     }
