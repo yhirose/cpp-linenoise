@@ -1429,7 +1429,7 @@ inline size_t unicodeGraphemeLen(char* buf, size_t buf_len, size_t pos)
     pos += unicodeUTF8CharLen(buf, buf_len, pos);
     while (pos < buf_len) {
         size_t len = unicodeUTF8CharLen(buf, buf_len, pos);
-        int cp;
+        int cp = 0;
         unicodeUTF8CharToCodePoint(buf + pos, len, &cp);
         if (!unicodeIsCombiningChar(cp)) {
             return pos - beg;
@@ -1450,7 +1450,7 @@ inline size_t unicodePrevGraphemeLen(char* buf, size_t pos)
     while (pos > 0) {
         size_t len = unicodePrevUTF8CharLen(buf, pos);
         pos -= len;
-        int cp;
+        int cp = 0;
         unicodeUTF8CharToCodePoint(buf + pos, len, &cp);
         if (!unicodeIsCombiningChar(cp)) {
             return end - pos;
@@ -1491,7 +1491,7 @@ inline size_t unicodeColumnPos(const char* buf, size_t buf_len)
             continue;
         }
 
-        int cp;
+        int cp = 0;
         len = unicodeUTF8CharToCodePoint(buf + off, buf_len - off, &cp);
 
         if (!unicodeIsCombiningChar(cp)) {
@@ -1513,7 +1513,7 @@ inline size_t unicodeColumnPosForMultiLine(char* buf, size_t buf_len, size_t pos
 
     size_t off = 0;
     while (off < buf_len) {
-        int cp;
+        int cp = 0;
         size_t len = unicodeUTF8CharToCodePoint(buf + off, buf_len - off, &cp);
 
         size_t wid = 0;
