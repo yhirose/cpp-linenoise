@@ -930,10 +930,9 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
 
 HANDLE hOut;
 HANDLE hIn;
-DWORD consolemode;
+DWORD consolemodeIn = 0;
 
 inline int win32read(int *c) {
-
     DWORD foo;
     INPUT_RECORD b;
     KEY_EVENT_RECORD e;
@@ -1623,30 +1622,31 @@ inline bool enableRawMode(int fd) {
     rawmode = true;
 #else
     if (!atexit_registered) {
-        /* Init windows console handles only once */
-        hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (hOut==INVALID_HANDLE_VALUE) goto fatal;
-
-        if (!GetConsoleMode(hOut, &consolemode)) {
-            CloseHandle(hOut);
-            errno = ENOTTY;
-            return false;
-        };
-
-        hIn = GetStdHandle(STD_INPUT_HANDLE);
-        if (hIn == INVALID_HANDLE_VALUE) {
-            CloseHandle(hOut);
-            errno = ENOTTY;
-            return false;
-        }
-
-        GetConsoleMode(hIn, &consolemode);
-        SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT);
-
         /* Cleanup them at exit */
         atexit(linenoiseAtExit);
         atexit_registered = true;
+
+        /* Init windows console handles only once */
+        hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        if (hOut==INVALID_HANDLE_VALUE) goto fatal;
     }
+
+    DWORD consolemodeOut;
+    if (!GetConsoleMode(hOut, &consolemodeOut)) {
+        CloseHandle(hOut);
+        errno = ENOTTY;
+        return false;
+    };
+
+    hIn = GetStdHandle(STD_INPUT_HANDLE);
+    if (hIn == INVALID_HANDLE_VALUE) {
+        CloseHandle(hOut);
+        errno = ENOTTY;
+        return false;
+    }
+
+    GetConsoleMode(hIn, &consolemodeIn);
+    SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT);
 
     rawmode = true;
 #endif
@@ -1659,6 +1659,10 @@ fatal:
 
 inline void disableRawMode(int fd) {
 #ifdef _WIN32
+    if (consolemodeIn) {
+      SetConsoleMode(hIn, consolemodeIn);
+      consolemodeIn = 0;
+    }
     rawmode = false;
 #else
     /* Don't even check the return value as it's too late. */
