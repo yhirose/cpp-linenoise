@@ -87,6 +87,7 @@ Tested compilers
 
   * Visual Studio 2015
   * Clang 3.5
+  * GCC 6.3.1
 
 License
 -------
