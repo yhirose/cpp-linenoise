@@ -189,7 +189,7 @@ const char BEL = '\x07';
 const char SO = '\x0E';  // Shift Out
 const char SI = '\x0F';  // Shift In
 
-const size_t MAX_ARG = 16;  // max number of args in an escape sequence
+const int MAX_ARG = 16;     // max number of args in an escape sequence
 int   state;                // automata state
 WCHAR prefix;               // escape sequence prefix ( '[', ']' or '(' );
 WCHAR prefix2;              // secondary prefix ( '?' or '>' );
@@ -1080,13 +1080,13 @@ struct linenoiseState {
     int ifd;            /* Terminal stdin file descriptor. */
     int ofd;            /* Terminal stdout file descriptor. */
     char *buf;          /* Edited line buffer. */
-    size_t buflen;      /* Edited line buffer size. */
+    int buflen;         /* Edited line buffer size. */
     std::string prompt; /* Prompt to display. */
-    size_t pos;         /* Current cursor position. */
-    size_t oldcolpos;   /* Previous refresh cursor column position. */
-    size_t len;         /* Current edited line length. */
-    size_t cols;        /* Number of columns in terminal. */
-    size_t maxrows;     /* Maximum num of rows used so far (multiline mode) */
+    int pos;            /* Current cursor position. */
+    int oldcolpos;      /* Previous refresh cursor column position. */
+    int len;            /* Current edited line length. */
+    int cols;           /* Number of columns in terminal. */
+    int maxrows;        /* Maximum num of rows used so far (multiline mode) */
     int history_index;  /* The history index we are currently editing. */
 };
 
@@ -1130,11 +1130,11 @@ static unsigned long unicodeWideCharTable[][2] = {
     { 0x1F240, 0x1F248, }, { 0x1F250, 0x1F251, }, { 0x20000, 0x3FFFD, },
 };
 
-static size_t unicodeWideCharTableSize = sizeof(unicodeWideCharTable) / sizeof(unicodeWideCharTable[0]);
+static int unicodeWideCharTableSize = sizeof(unicodeWideCharTable) / sizeof(unicodeWideCharTable[0]);
 
 static int unicodeIsWideChar(unsigned long cp)
 {
-    size_t i;
+    int i;
     for (i = 0; i < unicodeWideCharTableSize; i++) {
         if (unicodeWideCharTable[i][0] <= cp && cp <= unicodeWideCharTable[i][1]) {
             return 1;
@@ -1343,11 +1343,11 @@ static unsigned long unicodeCombiningCharTable[] = {
     0xE01ED,0xE01EE,0xE01EF,
 };
 
-static unsigned long unicodeCombiningCharTableSize = sizeof(unicodeCombiningCharTable) / sizeof(unicodeCombiningCharTable[0]);
+static int unicodeCombiningCharTableSize = sizeof(unicodeCombiningCharTable) / sizeof(unicodeCombiningCharTable[0]);
 
 inline int unicodeIsCombiningChar(unsigned long cp)
 {
-    size_t i;
+    int i;
     for (i = 0; i < unicodeCombiningCharTableSize; i++) {
         if (unicodeCombiningCharTable[i] == cp) {
             return 1;
@@ -1358,7 +1358,7 @@ inline int unicodeIsCombiningChar(unsigned long cp)
 
 /* Get length of previous UTF8 character
  */
-inline size_t unicodePrevUTF8CharLen(char* buf, int pos)
+inline int unicodePrevUTF8CharLen(char* buf, int pos)
 {
     int end = pos--;
     while (pos >= 0 && ((unsigned char)buf[pos] & 0xC0) == 0x80) {
@@ -1369,7 +1369,7 @@ inline size_t unicodePrevUTF8CharLen(char* buf, int pos)
 
 /* Get length of previous UTF8 character
  */
-inline size_t unicodeUTF8CharLen(char* buf, size_t buf_len, size_t pos)
+inline int unicodeUTF8CharLen(char* buf, int buf_len, int pos)
 {
     if (pos == buf_len) { return 0; }
     unsigned char ch = buf[pos];
@@ -1381,9 +1381,9 @@ inline size_t unicodeUTF8CharLen(char* buf, size_t buf_len, size_t pos)
 
 /* Convert UTF8 to Unicode code point
  */
-inline size_t unicodeUTF8CharToCodePoint(
+inline int unicodeUTF8CharToCodePoint(
    const char* buf,
-   size_t      len,
+   int         len,
    int*        cp)
 {
     if (len) {
@@ -1419,15 +1419,15 @@ inline size_t unicodeUTF8CharToCodePoint(
 
 /* Get length of grapheme
  */
-inline size_t unicodeGraphemeLen(char* buf, size_t buf_len, size_t pos)
+inline int unicodeGraphemeLen(char* buf, int buf_len, int pos)
 {
     if (pos == buf_len) {
         return 0;
     }
-    size_t beg = pos;
+    int beg = pos;
     pos += unicodeUTF8CharLen(buf, buf_len, pos);
     while (pos < buf_len) {
-        size_t len = unicodeUTF8CharLen(buf, buf_len, pos);
+        int len = unicodeUTF8CharLen(buf, buf_len, pos);
         int cp = 0;
         unicodeUTF8CharToCodePoint(buf + pos, len, &cp);
         if (!unicodeIsCombiningChar(cp)) {
@@ -1440,14 +1440,14 @@ inline size_t unicodeGraphemeLen(char* buf, size_t buf_len, size_t pos)
 
 /* Get length of previous grapheme
  */
-inline size_t unicodePrevGraphemeLen(char* buf, size_t pos)
+inline int unicodePrevGraphemeLen(char* buf, int pos)
 {
     if (pos == 0) {
         return 0;
     }
-    size_t end = pos;
+    int end = pos;
     while (pos > 0) {
-        size_t len = unicodePrevUTF8CharLen(buf, pos);
+        int len = unicodePrevUTF8CharLen(buf, pos);
         pos -= len;
         int cp = 0;
         unicodeUTF8CharToCodePoint(buf + pos, len, &cp);
@@ -1458,10 +1458,10 @@ inline size_t unicodePrevGraphemeLen(char* buf, size_t pos)
     return 0;
 }
 
-inline int isAnsiEscape(const char* buf, size_t buf_len, size_t* len)
+inline int isAnsiEscape(const char* buf, int buf_len, int* len)
 {
     if (buf_len > 2 && !memcmp("\033[", buf, 2)) {
-        size_t off = 2;
+        int off = 2;
         while (off < buf_len) {
             switch (buf[off++]) {
             case 'A': case 'B': case 'C': case 'D':
@@ -1478,13 +1478,13 @@ inline int isAnsiEscape(const char* buf, size_t buf_len, size_t* len)
 
 /* Get column position for the single line mode.
  */
-inline size_t unicodeColumnPos(const char* buf, size_t buf_len)
+inline int unicodeColumnPos(const char* buf, int buf_len)
 {
-    size_t ret = 0;
+    int ret = 0;
 
-    size_t off = 0;
+    int off = 0;
     while (off < buf_len) {
-        size_t len;
+        int len;
         if (isAnsiEscape(buf + off, buf_len - off, &len)) {
             off += len;
             continue;
@@ -1505,17 +1505,17 @@ inline size_t unicodeColumnPos(const char* buf, size_t buf_len)
 
 /* Get column position for the multi line mode.
  */
-inline size_t unicodeColumnPosForMultiLine(char* buf, size_t buf_len, size_t pos, size_t cols, size_t ini_pos)
+inline int unicodeColumnPosForMultiLine(char* buf, int buf_len, int pos, int cols, int ini_pos)
 {
-    size_t ret = 0;
-    size_t colwid = ini_pos;
+    int ret = 0;
+    int colwid = ini_pos;
 
-    size_t off = 0;
+    int off = 0;
     while (off < buf_len) {
         int cp = 0;
-        size_t len = unicodeUTF8CharToCodePoint(buf + off, buf_len - off, &cp);
+        int len = unicodeUTF8CharToCodePoint(buf + off, buf_len - off, &cp);
 
-        size_t wid = 0;
+        int wid = 0;
         if (!unicodeIsCombiningChar(cp)) {
             wid = unicodeIsWideChar(cp) ? 2 : 1;
         }
@@ -1543,9 +1543,9 @@ inline size_t unicodeColumnPosForMultiLine(char* buf, size_t buf_len, size_t pos
 
 /* Read UTF8 character from file.
  */
-inline size_t unicodeReadUTF8Char(int fd, char* buf, int* cp)
+inline int unicodeReadUTF8Char(int fd, char* buf, int* cp)
 {
-    size_t nread = read(fd,&buf[0],1);
+    int nread = read(fd,&buf[0],1);
 
     if (nread <= 0) { return nread; }
 
@@ -1769,14 +1769,14 @@ inline int completeLine(struct linenoiseState *ls, char *cbuf, int *c) {
     if (lc.empty()) {
         linenoiseBeep();
     } else {
-        size_t stop = 0, i = 0;
+        int stop = 0, i = 0;
 
         while(!stop) {
             /* Show completion or original buffer */
-            if (i < lc.size()) {
+            if (i < static_cast<int>(lc.size())) {
                 struct linenoiseState saved = *ls;
 
-                ls->len = ls->pos = lc[i].size();
+                ls->len = ls->pos = static_cast<int>(lc[i].size());
                 ls->buf = &lc[i][0];
                 refreshLine(ls);
                 ls->len = saved.len;
@@ -1807,12 +1807,12 @@ inline int completeLine(struct linenoiseState *ls, char *cbuf, int *c) {
                     break;
                 case 27: /* escape */
                     /* Re-show original buffer */
-                    if (i < lc.size()) refreshLine(ls);
+                    if (i < static_cast<int>(lc.size())) refreshLine(ls);
                     stop = 1;
                     break;
                 default:
                     /* Update buffer and return */
-                    if (i < lc.size()) {
+                    if (i < static_cast<int>(lc.size())) {
                         nwritten = snprintf(ls->buf,ls->buflen,"%s",&lc[i][0]);
                         ls->len = ls->pos = nwritten;
                     }
@@ -1838,11 +1838,11 @@ void SetCompletionCallback(CompletionCallback fn) {
  * cursor position, and number of columns of the terminal. */
 inline void refreshSingleLine(struct linenoiseState *l) {
     char seq[64];
-    size_t pcolwid = unicodeColumnPos(l->prompt.c_str(), l->prompt.length());
+    int pcolwid = unicodeColumnPos(l->prompt.c_str(), static_cast<int>(l->prompt.length()));
     int fd = l->ofd;
     char *buf = l->buf;
-    size_t len = l->len;
-    size_t pos = l->pos;
+    int len = l->len;
+    int pos = l->pos;
     std::string ab;
 
     while((pcolwid+unicodeColumnPos(buf, pos)) >= l->cols) {
@@ -1867,7 +1867,7 @@ inline void refreshSingleLine(struct linenoiseState *l) {
     /* Move cursor to original position. */
     snprintf(seq,64,"\r\x1b[%dC", (int)(unicodeColumnPos(buf, pos)+pcolwid));
     ab += seq;
-    if (write(fd,ab.c_str(),ab.length()) == -1) {} /* Can't recover from write error. */
+    if (write(fd,ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
 }
 
 /* Multi line low level line refresh.
@@ -1876,7 +1876,7 @@ inline void refreshSingleLine(struct linenoiseState *l) {
  * cursor position, and number of columns of the terminal. */
 inline void refreshMultiLine(struct linenoiseState *l) {
     char seq[64];
-    size_t pcolwid = unicodeColumnPos(l->prompt.c_str(), l->prompt.length());
+    int pcolwid = unicodeColumnPos(l->prompt.c_str(), static_cast<int>(l->prompt.length()));
     int colpos = unicodeColumnPosForMultiLine(l->buf, l->len, l->len, l->cols, pcolwid);
     int colpos2; /* cursor column position. */
     int rows = (pcolwid+colpos+l->cols-1)/l->cols; /* rows used by current buf. */
@@ -1946,7 +1946,7 @@ inline void refreshMultiLine(struct linenoiseState *l) {
 
     l->oldcolpos = colpos2;
 
-    if (write(fd,ab.c_str(),ab.length()) == -1) {} /* Can't recover from write error. */
+    if (write(fd,ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
 }
 
 /* Calls the two low level functions refreshSingleLine() or
@@ -1968,7 +1968,7 @@ inline int linenoiseEditInsert(struct linenoiseState *l, const char* cbuf, int c
             l->pos+=clen;
             l->len+=clen;;
             l->buf[l->len] = '\0';
-            if ((!mlmode && unicodeColumnPos(l->prompt.c_str(),l->prompt.length())+unicodeColumnPos(l->buf,l->len) < l->cols) /* || mlmode */) {
+            if ((!mlmode && unicodeColumnPos(l->prompt.c_str(), static_cast<int>(l->prompt.length()))+unicodeColumnPos(l->buf,l->len) < l->cols) /* || mlmode */) {
                 /* Avoid a full update of the line in the
                  * trivial case. */
                 if (write(l->ofd,cbuf,clen) == -1) return -1;
@@ -2034,12 +2034,12 @@ inline void linenoiseEditHistoryNext(struct linenoiseState *l, int dir) {
             l->history_index = 0;
             return;
         } else if (l->history_index >= (int)history.size()) {
-            l->history_index = history.size()-1;
+            l->history_index = static_cast<int>(history.size())-1;
             return;
         }
         memset(l->buf, 0, l->buflen);
         strcpy(l->buf,history[history.size() - 1 - l->history_index].c_str());
-        l->len = l->pos = strlen(l->buf);
+        l->len = l->pos = static_cast<int>(strlen(l->buf));
         refreshLine(l);
     }
 }
@@ -2071,8 +2071,8 @@ inline void linenoiseEditBackspace(struct linenoiseState *l) {
 /* Delete the previosu word, maintaining the cursor at the start of the
  * current word. */
 inline void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
-    size_t old_pos = l->pos;
-    size_t diff;
+    int old_pos = l->pos;
+    int diff;
 
     while (l->pos > 0 && l->buf[l->pos-1] == ' ')
         l->pos--;
@@ -2092,7 +2092,7 @@ inline void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
  * when ctrl+d is typed.
  *
  * The function returns the length of the current buffer. */
-inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt)
+inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, int buflen, const char *prompt)
 {
     struct linenoiseState l;
 
@@ -2117,7 +2117,7 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
      * initially is just an empty string. */
     AddHistory("");
 
-    if (write(l.ofd,prompt,l.prompt.length()) == -1) return -1;
+    if (write(l.ofd,prompt, static_cast<int>(l.prompt.length())) == -1) return -1;
     while(1) {
         int c;
         char cbuf[4];
