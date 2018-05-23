@@ -2147,7 +2147,7 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, int buflen, con
 
         switch(c) {
         case ENTER:    /* enter */
-            history.pop_back();
+            if (!history.empty()) history.pop_back();
             if (mlmode) linenoiseEditMoveEnd(&l);
             return (int)l.len;
         case CTRL_C:     /* ctrl-c */
