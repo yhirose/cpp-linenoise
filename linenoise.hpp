@@ -1826,7 +1826,7 @@ inline int completeLine(struct linenoiseState *ls, char *cbuf, int *c) {
 }
 
 /* Register a callback function to be called for tab-completion. */
-void SetCompletionCallback(CompletionCallback fn) {
+inline void SetCompletionCallback(CompletionCallback fn) {
     completionCallback = fn;
 }
 
