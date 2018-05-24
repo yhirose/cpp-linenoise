@@ -1803,7 +1803,7 @@ inline int completeLine(struct linenoiseState *ls, char *cbuf, int *c) {
             switch(*c) {
                 case 9: /* tab */
                     i = (i+1) % (lc.size()+1);
-                    if (i == lc.size()) linenoiseBeep();
+                    if (i == static_cast<int>(lc.size())) linenoiseBeep();
                     break;
                 case 27: /* escape */
                     /* Re-show original buffer */
@@ -2168,7 +2168,7 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, int buflen, con
             break;
         case CTRL_T:    /* ctrl-t, swaps current character with previous. */
             if (l.pos > 0 && l.pos < l.len) {
-                int aux = buf[l.pos-1];
+                char aux = buf[l.pos-1];
                 buf[l.pos-1] = buf[l.pos];
                 buf[l.pos] = aux;
                 if (l.pos != l.len-1) l.pos++;
