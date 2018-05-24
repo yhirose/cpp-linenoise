@@ -120,8 +120,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef __LINENOISE_HPP
-#define __LINENOISE_HPP
+#ifndef LINENOISE_HPP
+#define LINENOISE_HPP
 
 #ifndef _WIN32
 #include <termios.h>
