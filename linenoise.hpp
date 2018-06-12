@@ -755,7 +755,7 @@ inline void InterpretEscSeq(void)
                     switch (es_argv[0])
                         {
                             case 5:     // ESC[5n Report status
-                                SendSequence(L"\33[0n"); // "OK"
+                                SendSequence((LPWSTR)L"\33[0n"); // "OK"
                                 return;
 
                             case 6:     // ESC[6n Report cursor position
