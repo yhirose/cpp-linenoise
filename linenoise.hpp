@@ -329,11 +329,11 @@ inline void PushBuffer(WCHAR c)
 }
 
 //-----------------------------------------------------------------------------
-//   SendSequence( LPWSTR seq )
+//   SendSequence( LPCWSTR seq )
 // Send the string to the input buffer.
 //-----------------------------------------------------------------------------
 
-inline void SendSequence(LPWSTR seq)
+inline void SendSequence(LPCWSTR seq)
 {
     DWORD out;
     INPUT_RECORD in;
