@@ -1646,7 +1646,8 @@ inline bool enableRawMode(int fd) {
     }
 
     GetConsoleMode(hIn, &consolemodeIn);
-    SetConsoleMode(hIn, ENABLE_PROCESSED_INPUT);
+    DWORD consolemodeInWithRaw = consolemodeIn & ~ENABLE_PROCESSED_INPUT;
+    SetConsoleMode(hIn, consolemodeInWithRaw);
 
     rawmode = true;
 #endif
