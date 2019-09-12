@@ -142,6 +142,8 @@
 #define isatty _isatty
 #define write win32_write
 #define read _read
+#pragma warning(push)
+#pragma warning(disable : 4996)
 #endif
 #include <stdlib.h>
 #include <stdio.h>
@@ -2407,6 +2409,7 @@ inline const std::vector<std::string>& GetHistory() {
 #undef isatty
 #undef write
 #undef read
+#pragma warning(pop)
 #endif
 
 #endif /* __LINENOISE_HPP */
