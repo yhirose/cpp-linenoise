@@ -1025,7 +1025,7 @@ inline int win32read(int *c) {
                         *c = 8;
                         return 1;
                     case VK_DELETE:
-                        *c = 127;
+                        *c = 4; /* same as Ctrl+D above */
                         return 1;
                     default:
                         if (*c) return 1;
