@@ -777,7 +777,7 @@ inline void InterpretEscSeq(void)
                     if (es_argv[0] == 21)   // ESC[21t Report xterm window's title
                         {
                         WCHAR buf[MAX_PATH * 2];
-                        DWORD len = GetConsoleTitleW(buf + 3, lenof(buf) - 3 - 2);
+                        len = GetConsoleTitleW(buf + 3, lenof(buf) - 3 - 2);
                         // Too bad if it's too big or fails.
                         buf[0] = ESC;
                         buf[1] = ']';
