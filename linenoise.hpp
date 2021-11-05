@@ -1,10 +1,10 @@
 /*
- *  linenoise.hpp -- Multi-platfrom C++ header-only linenoise library.
+ *  linenoise.hpp -- Multi-platform C++ header-only linenoise library.
  *
  *  All credits and commendations have to go to the authors of the
  *  following excellent libraries.
  *
- *  - linenoise.h and linenose.c (https://github.com/antirez/linenoise)
+ *  - linenoise.h and linenoise.c (https://github.com/antirez/linenoise)
  *  - ANSI.c (https://github.com/adoxa/ansicon)
  *  - Win32_ANSI.h and Win32_ANSI.c (https://github.com/MSOpenTech/redis)
  *
@@ -372,7 +372,7 @@ inline void SendSequence(LPCWSTR seq)
 inline void InterpretEscSeq(void)
 {
     int  i;
-    WORD attribut;
+    WORD attribute;
     CONSOLE_SCREEN_BUFFER_INFO Info;
     CONSOLE_CURSOR_INFO CursInfo;
     DWORD len, NumberOfCharsWritten;
@@ -463,34 +463,34 @@ inline void InterpretEscSeq(void)
                         {
                         if (grm.rvideo)
                             {
-                            attribut = foregroundcolor[grm.foreground]
+                            attribute = foregroundcolor[grm.foreground]
                                 | backgroundcolor[grm.foreground];
                             if (grm.bold)
-                                attribut |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
+                                attribute |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
                             }
                         else
                             {
-                            attribut = foregroundcolor[grm.background]
+                            attribute = foregroundcolor[grm.background]
                                 | backgroundcolor[grm.background];
                             if (grm.underline)
-                                attribut |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
+                                attribute |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
                             }
                         }
                     else if (grm.rvideo)
                         {
-                        attribut = foregroundcolor[grm.background]
+                        attribute = foregroundcolor[grm.background]
                             | backgroundcolor[grm.foreground];
                         if (grm.bold)
-                            attribut |= BACKGROUND_INTENSITY;
+                            attribute |= BACKGROUND_INTENSITY;
                         if (grm.underline)
-                            attribut |= FOREGROUND_INTENSITY;
+                            attribute |= FOREGROUND_INTENSITY;
                         }
                     else
-                        attribut = foregroundcolor[grm.foreground] | grm.bold
+                        attribute = foregroundcolor[grm.foreground] | grm.bold
                         | backgroundcolor[grm.background] | grm.underline;
                     if (grm.reverse)
-                        attribut = ((attribut >> 4) & 15) | ((attribut & 15) << 4);
-                    SetConsoleTextAttribute(hConOut, attribut);
+                        attribute = ((attribute >> 4) & 15) | ((attribute & 15) << 4);
+                    SetConsoleTextAttribute(hConOut, attribute);
                     return;
 
                 case 'J':
@@ -1885,7 +1885,7 @@ inline void refreshMultiLine(struct linenoiseState *l) {
     int rows = (pcolwid+colpos+l->cols-1)/l->cols; /* rows used by current buf. */
     int rpos = (pcolwid+l->oldcolpos+l->cols)/l->cols; /* cursor relative row. */
     int rpos2; /* rpos after refresh. */
-    int col; /* colum position, zero-based. */
+    int col; /* column position, zero-based. */
     int old_rows = (int)l->maxrows;
     int fd = l->ofd, j;
     std::string ab;
@@ -1933,7 +1933,7 @@ inline void refreshMultiLine(struct linenoiseState *l) {
     /* Move cursor to right position. */
     rpos2 = (pcolwid+colpos2+l->cols)/l->cols; /* current cursor relative row. */
 
-    /* Go up till we reach the expected positon. */
+    /* Go up till we reach the expected position. */
     if (rows-rpos2 > 0) {
         snprintf(seq,64,"\x1b[%dA", rows-rpos2);
         ab += seq;
@@ -2071,7 +2071,7 @@ inline void linenoiseEditBackspace(struct linenoiseState *l) {
     }
 }
 
-/* Delete the previosu word, maintaining the cursor at the start of the
+/* Delete the previous word, maintaining the cursor at the start of the
  * current word. */
 inline void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
     int old_pos = l->pos;
