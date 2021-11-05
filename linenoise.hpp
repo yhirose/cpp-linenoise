@@ -1,5 +1,5 @@
 /*
- *  linenoise.hpp -- Multi-platfrom C++ header-only linenoise library.
+ *  linenoise.hpp -- Multi-platform C++ header-only linenoise library.
  *
  *  All credits and commendations have to go to the authors of the
  *  following excellent libraries.

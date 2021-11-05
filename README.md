@@ -1,7 +1,7 @@
 cpp-linenoise
 =============
 
-Multi-platfrom (Unix, Windows) C++ header-only linenoise-based readline library.
+Multi-platform (Unix, Windows) C++ header-only linenoise-based readline library.
 
 This library gathered code from following excellent libraries, clean it up, and put it into a C++ header file for convenience.
 
