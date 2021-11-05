@@ -1933,7 +1933,7 @@ inline void refreshMultiLine(struct linenoiseState *l) {
     /* Move cursor to right position. */
     rpos2 = (pcolwid+colpos2+l->cols)/l->cols; /* current cursor relative row. */
 
-    /* Go up till we reach the expected positon. */
+    /* Go up till we reach the expected position. */
     if (rows-rpos2 > 0) {
         snprintf(seq,64,"\x1b[%dA", rows-rpos2);
         ab += seq;
