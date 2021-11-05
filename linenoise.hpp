@@ -4,7 +4,7 @@
  *  All credits and commendations have to go to the authors of the
  *  following excellent libraries.
  *
- *  - linenoise.h and linenose.c (https://github.com/antirez/linenoise)
+ *  - linenoise.h and linenoise.c (https://github.com/antirez/linenoise)
  *  - ANSI.c (https://github.com/adoxa/ansicon)
  *  - Win32_ANSI.h and Win32_ANSI.c (https://github.com/MSOpenTech/redis)
  *
