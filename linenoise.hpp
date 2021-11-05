@@ -1885,7 +1885,7 @@ inline void refreshMultiLine(struct linenoiseState *l) {
     int rows = (pcolwid+colpos+l->cols-1)/l->cols; /* rows used by current buf. */
     int rpos = (pcolwid+l->oldcolpos+l->cols)/l->cols; /* cursor relative row. */
     int rpos2; /* rpos after refresh. */
-    int col; /* colum position, zero-based. */
+    int col; /* column position, zero-based. */
     int old_rows = (int)l->maxrows;
     int fd = l->ofd, j;
     std::string ab;
