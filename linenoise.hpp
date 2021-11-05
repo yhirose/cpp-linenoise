@@ -372,7 +372,7 @@ inline void SendSequence(LPCWSTR seq)
 inline void InterpretEscSeq(void)
 {
     int  i;
-    WORD attribut;
+    WORD attribute;
     CONSOLE_SCREEN_BUFFER_INFO Info;
     CONSOLE_CURSOR_INFO CursInfo;
     DWORD len, NumberOfCharsWritten;
@@ -463,34 +463,34 @@ inline void InterpretEscSeq(void)
                         {
                         if (grm.rvideo)
                             {
-                            attribut = foregroundcolor[grm.foreground]
+                            attribute = foregroundcolor[grm.foreground]
                                 | backgroundcolor[grm.foreground];
                             if (grm.bold)
-                                attribut |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
+                                attribute |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
                             }
                         else
                             {
-                            attribut = foregroundcolor[grm.background]
+                            attribute = foregroundcolor[grm.background]
                                 | backgroundcolor[grm.background];
                             if (grm.underline)
-                                attribut |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
+                                attribute |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
                             }
                         }
                     else if (grm.rvideo)
                         {
-                        attribut = foregroundcolor[grm.background]
+                        attribute = foregroundcolor[grm.background]
                             | backgroundcolor[grm.foreground];
                         if (grm.bold)
-                            attribut |= BACKGROUND_INTENSITY;
+                            attribute |= BACKGROUND_INTENSITY;
                         if (grm.underline)
-                            attribut |= FOREGROUND_INTENSITY;
+                            attribute |= FOREGROUND_INTENSITY;
                         }
                     else
-                        attribut = foregroundcolor[grm.foreground] | grm.bold
+                        attribute = foregroundcolor[grm.foreground] | grm.bold
                         | backgroundcolor[grm.background] | grm.underline;
                     if (grm.reverse)
-                        attribut = ((attribut >> 4) & 15) | ((attribut & 15) << 4);
-                    SetConsoleTextAttribute(hConOut, attribut);
+                        attribute = ((attribute >> 4) & 15) | ((attribute & 15) << 4);
+                    SetConsoleTextAttribute(hConOut, attribute);
                     return;
 
                 case 'J':
