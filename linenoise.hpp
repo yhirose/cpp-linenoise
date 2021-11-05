@@ -2071,7 +2071,7 @@ inline void linenoiseEditBackspace(struct linenoiseState *l) {
     }
 }
 
-/* Delete the previosu word, maintaining the cursor at the start of the
+/* Delete the previous word, maintaining the cursor at the start of the
  * current word. */
 inline void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
     int old_pos = l->pos;
