@@ -320,13 +320,67 @@ inline void FlushBuffer(void)
 // Adds a character in the buffer.
 //-----------------------------------------------------------------------------
 
-inline void PushBuffer(WCHAR c)
+inline DWORD PushBuffer(LPCSTR buf, DWORD size)
 {
-    if (shifted && c >= FIRST_G1 && c <= LAST_G1)
-        c = G1[c - FIRST_G1];
-    ChBuffer[nCharInBuffer] = c;
-    if (++nCharInBuffer == BUFFER_SIZE)
-        FlushBuffer();
+	if (size < 1)
+	{
+		return 0;
+	}
+
+	WCHAR wideChars[2];
+	int wideCharCount;
+	if (shifted && *buf >= FIRST_G1 && *buf <= LAST_G1)
+	{
+		wideChars[0] = G1[*buf - FIRST_G1];
+		wideCharCount = 1;
+	}
+	else
+	{
+        // Find the complete UTF-8 character
+		unsigned char byte = buf[0];
+		DWORD utf8Size;
+
+		if ((byte & 0x80) == 0)
+		{
+			utf8Size = 1;
+		}
+		else if ((byte & 0xE0) == 0xC0)
+		{
+			utf8Size = 2;
+		}
+		else if ((byte & 0xF0) == 0xE0)
+		{
+			utf8Size = 3;
+		}
+		else if ((byte & 0xF8) == 0xF0)
+		{
+			utf8Size = 4;
+		}
+		else
+		{
+			return 0;
+		}
+
+        if (size < utf8Size)
+		{
+			return 0;
+		}
+
+        wideCharCount = MultiByteToWideChar(CP_UTF8, 0, buf, utf8Size, wideChars, 2);
+		if (wideCharCount == 0)
+        {
+			return 0;
+        }
+	}
+
+    for (int i = 0; i < wideCharCount; ++i)
+	{
+		ChBuffer[nCharInBuffer] = wideChars[i];
+		if (++nCharInBuffer == BUFFER_SIZE)
+			FlushBuffer();
+	}
+
+    return wideCharCount;
 }
 
 //-----------------------------------------------------------------------------
@@ -369,12 +423,11 @@ inline void SendSequence(LPCWSTR seq)
 // suffix = 'm'
 //-----------------------------------------------------------------------------
 
-inline void InterpretEscSeq(void)
+inline void InterpretEscSeq(PCONSOLE_CURSOR_INFO lpConsoleCursorInfo)
 {
     int  i;
     WORD attribute;
     CONSOLE_SCREEN_BUFFER_INFO Info;
-    CONSOLE_CURSOR_INFO CursInfo;
     DWORD len, NumberOfCharsWritten;
     COORD Pos;
     SMALL_RECT Rect;
@@ -386,9 +439,7 @@ inline void InterpretEscSeq(void)
             {
             if (es_argc == 1 && es_argv[0] == 25)
                 {
-                GetConsoleCursorInfo(hConOut, &CursInfo);
-                CursInfo.bVisible = (suffix == 'h');
-                SetConsoleCursorInfo(hConOut, &CursInfo);
+				lpConsoleCursorInfo->bVisible = (suffix == 'h');
                 return;
                 }
             }
@@ -826,6 +877,13 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
         state = 1;
         shifted = FALSE;
         }
+
+    CONSOLE_CURSOR_INFO oldConsoleCursorInfo;
+	GetConsoleCursorInfo(hConOut, & oldConsoleCursorInfo);
+
+    CONSOLE_CURSOR_INFO invisibleCursor { .dwSize = oldConsoleCursorInfo.dwSize, .bVisible = 0 };
+	SetConsoleCursorInfo(hConOut, &invisibleCursor);
+
     for (i = nNumberOfBytesToWrite, s = (LPCSTR)lpBuffer; i > 0; i--, s++)
         {
         if (state == 1)
@@ -833,7 +891,16 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
             if (*s == ESC) state = 2;
             else if (*s == SO) shifted = TRUE;
             else if (*s == SI) shifted = FALSE;
-            else PushBuffer(*s);
+            else
+			    {
+				DWORD written = PushBuffer(s, nNumberOfBytesToWrite);
+				if (written > 0)
+				    {
+					DWORD extraWritten = written - 1;
+					i -= extraWritten;
+					s += extraWritten;
+					}
+                }
             }
         else if (state == 2)
             {
@@ -873,7 +940,7 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
                 {
                 es_argc = 0;
                 suffix = *s;
-                InterpretEscSeq();
+				InterpretEscSeq(&oldConsoleCursorInfo);
                 state = 1;
                 }
             }
@@ -894,7 +961,7 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
                 {
                 es_argc++;
                 suffix = *s;
-                InterpretEscSeq();
+				InterpretEscSeq(&oldConsoleCursorInfo);
                 state = 1;
                 }
             }
@@ -903,13 +970,13 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
             if (*s == BEL)
                 {
                 Pt_arg[Pt_len] = '\0';
-                InterpretEscSeq();
+                InterpretEscSeq(&oldConsoleCursorInfo);
                 state = 1;
                 }
             else if (*s == '\\' && Pt_len > 0 && Pt_arg[Pt_len - 1] == ESC)
                 {
                 Pt_arg[--Pt_len] = '\0';
-                InterpretEscSeq();
+                InterpretEscSeq(&oldConsoleCursorInfo);
                 state = 1;
                 }
             else if (Pt_len < lenof(Pt_arg) - 1)
@@ -922,6 +989,9 @@ inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumber
             }
         }
     FlushBuffer();
+
+	SetConsoleCursorInfo(hConOut, &oldConsoleCursorInfo);
+
     if (lpNumberOfBytesWritten != NULL)
         *lpNumberOfBytesWritten = nNumberOfBytesToWrite - i;
     return (i == 0);
@@ -933,20 +1003,20 @@ HANDLE hOut;
 HANDLE hIn;
 DWORD consolemodeIn = 0;
 
-inline int win32read(int *c) {
+inline int win32readW(WCHAR *c) {
     DWORD foo;
     INPUT_RECORD b;
     KEY_EVENT_RECORD e;
     BOOL altgr;
 
     while (1) {
-        if (!ReadConsoleInput(hIn, &b, 1, &foo)) return 0;
+        if (!ReadConsoleInputW(hIn, &b, 1, &foo)) return 0;
         if (!foo) return 0;
 
         if (b.EventType == KEY_EVENT && b.Event.KeyEvent.bKeyDown) {
 
             e = b.Event.KeyEvent;
-            *c = b.Event.KeyEvent.uChar.AsciiChar;
+            *c = b.Event.KeyEvent.uChar.UnicodeChar;
 
             altgr = e.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_ALT_PRESSED);
 
@@ -954,40 +1024,40 @@ inline int win32read(int *c) {
 
                 /* Ctrl+Key */
                 switch (*c) {
-                    case 'D':
+                    case L'D':
                         *c = 4;
                         return 1;
-                    case 'C':
+                    case L'C':
                         *c = 3;
                         return 1;
-                    case 'H':
+                    case L'H':
                         *c = 8;
                         return 1;
-                    case 'T':
+                    case L'T':
                         *c = 20;
                         return 1;
-                    case 'B': /* ctrl-b, left_arrow */
+                    case L'B': /* ctrl-b, left_arrow */
                         *c = 2;
                         return 1;
-                    case 'F': /* ctrl-f right_arrow*/
+                    case L'F': /* ctrl-f right_arrow*/
                         *c = 6;
                         return 1;
-                    case 'P': /* ctrl-p up_arrow*/
+                    case L'P': /* ctrl-p up_arrow*/
                         *c = 16;
                         return 1;
-                    case 'N': /* ctrl-n down_arrow*/
+                    case L'N': /* ctrl-n down_arrow*/
                         *c = 14;
                         return 1;
-                    case 'U': /* Ctrl+u, delete the whole line. */
+                    case L'U': /* Ctrl+u, delete the whole line. */
                         *c = 21;
                         return 1;
-                    case 'K': /* Ctrl+k, delete from current to end of line. */
+                    case L'K': /* Ctrl+k, delete from current to end of line. */
                         *c = 11;
                         return 1;
-                    case 'A': /* Ctrl+a, go to the start of the line */
+                    case L'A': /* Ctrl+a, go to the start of the line */
                         *c = 1;
                         return 1;
-                    case 'E': /* ctrl+e, go to the end of the line */
+                    case L'E': /* ctrl+e, go to the end of the line */
                         *c = 5;
                         return 1;
                 }
@@ -1035,6 +1105,38 @@ inline int win32read(int *c) {
     }
 
     return -1; /* Makes compiler happy */
+}
+
+inline int win32read(char *buf, int *c)
+{
+	WCHAR wideChars[2];
+	int wideCharCount;
+	if (win32readW(wideChars) != 1)
+	{
+		return 0;
+	}
+
+    // check for high surrogate
+	if (!IS_HIGH_SURROGATE(wideChars[0]))
+	{
+		*c = wideChars[0];
+		wideCharCount = 1;
+	}
+	else
+	{
+		if (win32readW(wideChars + 1) != 1)
+		{
+			return 0;
+		}
+
+        // combine the surrogates
+        *c = 0x10000 + (((wideChars[0] & 0x3ff) << 10) | (wideChars[1] & 0x3ff));
+		wideCharCount = 2;
+	}
+
+	auto count = WideCharToMultiByte(CP_UTF8, 0, wideChars, wideCharCount, buf, 4, nullptr, nullptr);
+
+    return count;
 }
 
 inline int win32_write(int fd, const void *buffer, unsigned int count) {
@@ -1706,7 +1808,7 @@ inline int getColumns(int ifd, int ofd) {
     CONSOLE_SCREEN_BUFFER_INFO b;
 
     if (!GetConsoleScreenBufferInfo(hOut, &b)) return 80;
-    return b.srWindow.Right - b.srWindow.Left;
+    return (b.srWindow.Right - b.srWindow.Left) + 1;
 #else
     struct winsize ws;
 
@@ -1791,10 +1893,7 @@ inline int completeLine(struct linenoiseState *ls, char *cbuf, int *c) {
 
             //nread = read(ls->ifd,&c,1);
 #ifdef _WIN32
-            nread = win32read(c);
-            if (nread == 1) {
-                cbuf[0] = *c;
-            }
+            nread = win32read(cbuf, c);
 #else
             nread = unicodeReadUTF8Char(ls->ifd,cbuf,c);
 #endif
@@ -2128,10 +2227,7 @@ inline int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, int buflen, con
         char seq[3];
 
 #ifdef _WIN32
-        nread = win32read(&c);
-        if (nread == 1) {
-            cbuf[0] = c;
-        }
+        nread = win32read(cbuf, &c);
 #else
         nread = unicodeReadUTF8Char(l.ifd,cbuf,&c);
 #endif
