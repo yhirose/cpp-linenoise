@@ -173,7 +173,7 @@ typedef std::function<void(const char *, std::vector<std::string> &)>
  * provides methods by which user programs can act on that state. */
 class linenoiseState {
 public:
-  void Initialize(int stdin_fd, int stdout_fd, int buflen, const char *prompt);
+  linenoiseState(const char *prompt = NULL, int stdin_fd = STDIN_FILENO, int stdout_fd = STDOUT_FILENO);
 
   void EnableMultiLine(bool);
 
@@ -2090,12 +2090,10 @@ void linenoiseState::refreshSingleLine() {
  * cursor position, and number of columns of the terminal. */
 void linenoiseState::refreshMultiLine() {
   char seq[64];
-  int pcolwid =
-      unicodeColumnPos(prompt.c_str(), static_cast<int>(prompt.length()));
+  int pcolwid = unicodeColumnPos(prompt.c_str(), static_cast<int>(prompt.length()));
   int colpos = unicodeColumnPosForMultiLine(buf, len, len, cols, pcolwid);
   int colpos2; /* cursor column position. */
-  int rows =
-      (pcolwid + colpos + cols - 1) / cols; /* rows used by current buf. */
+  int rows = (pcolwid + colpos + cols - 1) / cols; /* rows used by current buf. */
   int rpos = (pcolwid + oldcolpos + cols) / cols; /* cursor relative row. */
   int rpos2;                                      /* rpos after refresh. */
   int col; /* column position, zero-based. */
@@ -2538,16 +2536,14 @@ bool linenoiseState::linenoiseRaw(std::string &line) {
   return quit;
 }
 
-void linenoiseState::Initialize(int stdin_fd, int stdout_fd, int i_buflen,
-                                const char *prompt_str) {
+linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int stdout_fd) {
   /* Populate the linenoise state that we pass to functions implementing
    * specific editing functionalities. */
   ifd = stdin_fd;
   ofd = stdout_fd;
   buf = wbuf;
-  buflen = i_buflen;
-  prompt = std::string(prompt_str);
-  cols = getColumns(stdin_fd, stdout_fd);
+  prompt = (prompt_str) ? std::string(prompt_str) : std::string("> ");
+  cols = getColumns(ifd, ofd);
 
   /* Buffer starts empty. */
   buf[0] = '\0';
