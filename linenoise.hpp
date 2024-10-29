@@ -2256,24 +2256,33 @@ void linenoiseState::linenoiseEditMoveEnd() {
 #define LINENOISE_HISTORY_NEXT 0
 #define LINENOISE_HISTORY_PREV 1
 void linenoiseState::linenoiseEditHistoryNext(int dir) {
-  if (history.size() > 1) {
-    /* Update the current history entry before to
-     * overwrite it with the next one. */
-    history[history.size() - 1 - history_index] = buf;
-    /* Show the new entry */
-    history_index += (dir == LINENOISE_HISTORY_PREV) ? 1 : -1;
-    if (history_index < 0) {
-      history_index = 0;
-      return;
-    } else if (history_index >= (int)history.size()) {
-      history_index = static_cast<int>(history.size()) - 1;
-      return;
-    }
-    memset(buf, 0, l->buflen);
-    strcpy(buf, history[history.size() - 1 - history_index].c_str());
-    len = pos = static_cast<int>(strlen(buf));
-    refreshLine();
+  int history_size = static_cast<int>(history.size());
+  if (!history_size)
+    return;
+  /* Show the new entry */
+  if (history_index == -1) {
+    history_tmpbuf = std::string(buf);
+    history_index = history.size() - 1;
+  } else {
+    if (history_index == history_size)
+      history_tmpbuf = std::string(buf);
+    history_index += (dir == LINENOISE_HISTORY_PREV) ? -1 : 1;
   }
+  if (history_index < 0)
+    history_index = history_size;
+  if (history_index == history_size) {
+    memset(buf, 0, buflen);
+    strcpy(buf, history_tmpbuf.c_str());
+    len = pos = static_cast<int>(history_tmpbuf.size());
+    RefreshLine();
+    return;
+  }
+  if (history_index > history_size)
+    history_index = 0;
+  memset(buf, 0, buflen);
+  strcpy(buf, history[history_index].c_str());
+  len = pos = static_cast<int>(strlen(buf));
+  RefreshLine();
 }
 
 /* Delete the character at the right of the cursor without altering the cursor
@@ -2327,11 +2336,6 @@ void linenoiseState::linenoiseEditDeletePrevWord() {
 int linenoiseState::linenoiseEdit()
 //, int stdin_fd, int stdout_fd, char *buf, int buflen, const char *prompt)
 {
-
-  /* The latest history entry is always our current buffer, that
-   * initially is just an empty string. */
-  AddHistory("");
-
   if (write(ofd, prompt.c_str(), static_cast<int>(prompt.length())) == -1)
     return -1;
   while (1) {
@@ -2366,7 +2370,8 @@ int linenoiseState::linenoiseEdit()
 
     switch (c) {
     case ENTER: /* enter */
-      if (!history.empty())
+      history_index = -1;
+      if (history.size() == history_max_len)
         history.pop_back();
       if (mlmode)
         linenoiseEditMoveEnd();
@@ -2592,6 +2597,8 @@ inline void linenoiseAtExit(void) { disableRawMode(STDIN_FILENO); }
  * Using a circular buffer is smarter, but a bit more complex to handle. */
 bool linenoiseState::AddHistory(const char *line) {
   if (history_max_len == 0)
+    return false;
+  if (!line || !strlen(line))
     return false;
 
   /* Don't add duplicated lines. */
