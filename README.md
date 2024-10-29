@@ -3,7 +3,8 @@ cpp-linenoise
 
 Multi-platform (Unix, Windows) C++ header-only linenoise-based readline library.
 
-This library gathered code from following excellent libraries, clean it up, and put it into a C++ header file for convenience.
+This version of cpp-linenoise is derived from https://github.com/yhirose/cpp-linenoise,
+which is in turn assembled from the following libraries:
 
  * `linenoise.h` and `linenoise.c` ([antirez/linenoise](https://github.com/antirez/linenoise))
  * `ANSI.c` ([adoxa/ansicon](https://github.com/adoxa/ansicon))
@@ -21,6 +22,8 @@ Usage
 
 const auto path = "history.txt";
 
+linenoise::linenoiseState l("hello> ");
+
 // Setup completion words every time when a user types
 linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
     if (editBuffer[0] == 'h') {
@@ -30,18 +33,18 @@ linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::str
 });
 
 // Enable the multi-line mode
-linenoise::SetMultiLine(true);
+l.EnableMultiLine(true);
 
 // Set max length of the history
-linenoise::SetHistoryMaxLen(4);
+l.SetHistoryMaxLen(4);
 
 // Load history
-linenoise::LoadHistory(path);
+l.LoadHistory(path);
 
 while (true) {
     // Read line
     std::string line;
-    auto quit = linenoise::Readline("hello> ", line);
+    auto quit = l.Readline(line);
 
     if (quit) {
         break;
@@ -50,44 +53,17 @@ while (true) {
     cout <<  "echo: '" << line << "'" << endl;
 
     // Add text to history
-    linenoise::AddHistory(line.c_str());
+    lAddHistory(line.c_str());
 }
 
 // Save history
-linenoise::SaveHistory(path);
+l.SaveHistory(path);
 ```
 
 API
 ---
 
-```c++
-namespace linenoise;
-
-std::string Readline(const char* prompt);
-
-void SetMultiLine(bool multiLineMode);
-
-typedef std::function<void (const char* editBuffer, std::vector<std::string>& completions)> CompletionCallback;
-
-void SetCompletionCallback(CompletionCallback fn);
-
-bool SetHistoryMaxLen(size_t len);
-
-bool LoadHistory(const char* path);
-
-bool SaveHistory(const char* path);
-
-bool AddHistory(const char* line);
-
-const std::vector<std::string>& GetHistory();
-```
-
-Tested compilers
-----------------
-
-  * Visual Studio 2015
-  * Clang 3.5
-  * GCC 6.3.1
+The public methods on the linenoiseState class are considered the public API.
 
 License
 -------
