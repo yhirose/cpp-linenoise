@@ -153,6 +153,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,6 +195,7 @@ public:
   };
 
   std::string prompt = std::string("> "); /* Prompt to display. */
+  std::mutex r_mutex;
 
 private:
   std::string Readline(bool &quit);
@@ -2166,12 +2168,17 @@ void linenoiseState::refreshMultiLine() {
 /* Calls the two low level functions refreshSingleLine() or
  * refreshMultiLine() according to the selected mode.
  *
+ * Note that we use this when recovering the line after writing
+ * console output from another thread, (i.e. independent of a
+ * Readline call) so we use a mutex for basic thread safety.
  * */
 void linenoiseState::RefreshLine() {
+  r_mutex.lock();
   if (mlmode)
     refreshMultiLine();
   else
     refreshSingleLine();
+  r_mutex.unlock();
 }
 
 void linenoiseState::WipeLine() { linenoiseWipeLine(); }
