@@ -364,7 +364,6 @@ inline void SendSequence(LPCWSTR seq) {
 //-----------------------------------------------------------------------------
 
 inline void InterpretEscSeq(void) {
-  int i;
   WORD attribute;
   CONSOLE_SCREEN_BUFFER_INFO Info;
   CONSOLE_CURSOR_INFO CursInfo;
@@ -391,7 +390,7 @@ inline void InterpretEscSeq(void) {
     case 'm':
       if (es_argc == 0)
         es_argv[es_argc++] = 0;
-      for (i = 0; i < es_argc; i++) {
+      for (int i = 0; i < es_argc; i++) {
         if (30 <= es_argv[i] && es_argv[i] <= 37)
           grm.foreground = es_argv[i] - 30;
         else if (40 <= es_argv[i] && es_argv[i] <= 47)
