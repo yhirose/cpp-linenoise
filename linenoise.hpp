@@ -175,7 +175,8 @@ class linenoiseState {
 public:
   linenoiseState(const char *prompt = NULL, int stdin_fd = STDIN_FILENO, int stdout_fd = STDOUT_FILENO);
 
-  void EnableMultiLine(bool);
+  void EnableMultiLine();
+  void DisableMultiLine();
 
   bool AddHistory(const char *line);
   bool LoadHistory(const char *path);
@@ -2631,7 +2632,8 @@ linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int stdout_
   buflen--; /* Make sure there is always space for the nulterm */
 }
 
-void linenoiseState::EnableMultiLine(bool ml) { SetMultiLine(ml); }
+void linenoiseState::EnableMultiLine() { SetMultiLine(true); }
+void linenoiseState::DisableMultiLine() { SetMultiLine(false); }
 
 /* The high level function that is the main API of the linenoise library.
  * This function checks if the terminal has basic capabilities, just checking

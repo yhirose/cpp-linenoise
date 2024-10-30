@@ -33,7 +33,7 @@ l.SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& com
 });
 
 // Enable the multi-line mode
-l.EnableMultiLine(true);
+l.EnableMultiLine();
 
 // Set max length of the history
 l.SetHistoryMaxLen(4);
