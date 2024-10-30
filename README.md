@@ -53,7 +53,7 @@ while (true) {
     cout <<  "echo: '" << line << "'" << endl;
 
     // Add text to history
-    lAddHistory(line.c_str());
+    l.AddHistory(line.c_str());
 }
 
 // Save history
