@@ -25,7 +25,7 @@ const auto path = "history.txt";
 linenoise::linenoiseState l("hello> ");
 
 // Setup completion words every time when a user types
-linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
+l.SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
     if (editBuffer[0] == 'h') {
         completions.push_back("hello");
         completions.push_back("hello there");
