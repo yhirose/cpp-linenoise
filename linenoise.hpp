@@ -217,8 +217,6 @@ class linenoiseState {
         void refreshMultiLine();
         int completeLine(char *cbuf, int *c);
 
-	bool isUnsupportedTerm(void);
-
         CompletionCallback completionCallback;
 
         int ifd = STDIN_FILENO;          /* Terminal stdin file descriptor. */
@@ -1160,7 +1158,6 @@ static struct termios orig_termios; /* In order to restore at exit.*/
 static bool rawmode = false; /* For atexit() function to check if restore is needed*/
 static bool mlmode = false;  /* Multi line mode. Default is single line. */
 static bool atexit_registered = false; /* Register atexit just 1 time. */
-static size_t history_max_len = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
 static std::vector<std::string> history;
 
 enum KEY_ACTION {
@@ -1650,7 +1647,7 @@ void linenoiseState::SetMultiLine(bool ml) {
 
 /* Return true if the terminal name is in the list of terminals we know are
  * not able to understand basic escape sequences. */
-bool linenoiseState::isUnsupportedTerm(void) {
+static bool isUnsupportedTerm(void) {
 #ifndef _WIN32
     char *term = getenv("TERM");
     int j;
@@ -1934,9 +1931,6 @@ void linenoiseState::refreshSingleLine() {
     char seq[64];
     int pcolwid = unicodeColumnPos(prompt.c_str(), static_cast<int>(prompt.length()));
     int fd = ofd;
-    char *buf = buf;
-    int len = len;
-    int pos = pos;
     std::string ab;
 
     if (lcols <= 0)
@@ -2208,10 +2202,7 @@ void linenoiseState::linenoiseEditDeletePrevWord() {
  *
  * The function returns the length of the current buffer. */
 int linenoiseState::linenoiseEdit()
-		//int stdin_fd, int stdout_fd, char *buf, int buflen)
 {
-    lcols = getColumns(ifd, ofd);
-
     if (write(ofd, prompt.c_str(), static_cast<int>(prompt.length())) == -1) return -1;
     while(1) {
         int c;
@@ -2266,9 +2257,9 @@ int linenoiseState::linenoiseEdit()
             break;
         case CTRL_T:    /* ctrl-t, swaps current character with previous. */
             if (pos > 0 && pos < len) {
-                char aux = buf[pos-1];
-                buf[pos-1] = buf[pos];
-                buf[pos] = aux;
+                char aux = wbuf[pos-1];
+                wbuf[pos-1] = wbuf[pos];
+                wbuf[pos] = aux;
                 if (pos != len-1) pos++;
                 RefreshLine();
             }
@@ -2344,12 +2335,12 @@ int linenoiseState::linenoiseEdit()
             if (linenoiseEditInsert(cbuf,nread)) return -1;
             break;
         case CTRL_U: /* Ctrl+u, delete the whole line. */
-            buf[0] = '\0';
+            wbuf[0] = '\0';
             pos = len = 0;
             RefreshLine();
             break;
         case CTRL_K: /* Ctrl+k, delete from current to end of line. */
-            buf[pos] = '\0';
+            wbuf[pos] = '\0';
             len = pos;
             RefreshLine();
             break;
@@ -2396,7 +2387,13 @@ bool linenoiseState::linenoiseRaw(std::string& line) {
             return quit;
         }
 
-        char buf[LINENOISE_MAX_LINE];
+	/* Buffer starts empty.  Since we're potentially
+	 * reusing the state, we need to reset these. */
+	pos = 0;
+	len = 0;
+	buf[0] = '\0';
+	wbuf[0] = '\0';
+
         auto count = linenoiseEdit();
         if (count == -1) {
             quit = true;
@@ -2496,11 +2493,11 @@ bool linenoiseState::AddHistory(const char* line) {
  * if there is already some history, the function will make sure to retain
  * just the latest 'len' elements if the new history length value is smaller
  * than the amount of items already inside the history. */
-bool linenoiseState::SetHistoryMaxLen(size_t len) {
-    if (len < 1) return false;
-    history_max_len = len;
-    if (len < history.size()) {
-        history.resize(len);
+bool linenoiseState::SetHistoryMaxLen(size_t mlen) {
+    if (mlen < 1) return false;
+    history_max_len = mlen;
+    if (mlen < history.size()) {
+        history.resize(mlen);
     }
     return true;
 }
