@@ -184,6 +184,8 @@ class linenoiseState {
 
         bool Readline(std::string &line); // Primary linenoise entry point
         void RefreshLine(); // Restore current line
+        void WipeLine(); // Temporarily removes line from screen - RefreshLine will restore
+        void ClearScreen(); // Clear terminal window
 
         /* Register a callback function to be called for tab-completion. */
         void SetCompletionCallback(CompletionCallback fn) {
@@ -1817,6 +1819,21 @@ inline void linenoiseClearScreen(void) {
     }
 }
 
+/* Temporarily clear the line from the screen,
+ * without resetting its state.  Used for
+ * temporarily clearing prompt and input while
+ * printing other content. */
+inline void linenoiseWipeLine() {
+    // Clear line
+    if (write(STDOUT_FILENO, "\33[2K", 4) < 0) {
+        /* nothing to do, just to avoid warning. */
+    }
+    // Move cursor to the left
+    if (write(STDOUT_FILENO, "\r", 1) < 0) {
+        /* nothing to do, just to avoid warning. */
+    }
+}
+
 /* Beep, used for completion when there is nothing to complete or when all
  * the choices were already shown. */
 inline void linenoiseBeep(void) {
@@ -2027,6 +2044,10 @@ void linenoiseState::RefreshLine() {
         refreshSingleLine();
     r_mutex.unlock();
 }
+
+void linenoiseState::WipeLine() { linenoiseWipeLine(); }
+
+void linenoiseState::ClearScreen() { linenoiseClearScreen(); }
 
 /* Insert the character 'c' at cursor current position.
  *
