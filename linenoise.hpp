@@ -193,6 +193,9 @@ class linenoiseState {
         std::string prompt = std::string("> "); /* Prompt to display. */
         std::mutex r_mutex;
 
+	// For functional interface
+	void SetMultiLine(bool ml);
+
     private:
         std::string Readline(bool &quit);
         std::string Readline();
@@ -213,7 +216,6 @@ class linenoiseState {
         int completeLine(char *cbuf, int *c);
 
 	bool isUnsupportedTerm(void);
-	void SetMultiLine(bool ml);
 
         CompletionCallback completionCallback;
 
@@ -233,6 +235,21 @@ class linenoiseState {
         size_t history_max_len = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
         std::vector<std::string> history;
 };
+
+
+/* Older style public API */
+linenoiseState *lglobal = NULL;
+void SetCompletionCallback(CompletionCallback fn);
+void SetMultiLine(bool ml);
+bool AddHistory(const char* line);
+bool SetHistoryMaxLen(size_t len);
+bool SaveHistory(const char* path);
+bool LoadHistory(const char* path);
+const std::vector<std::string>& GetHistory();
+bool Readline(const char *prompt, std::string& line);
+std::string Readline(const char *prompt, bool& quit);
+std::string Readline(const char *prompt);
+
 
 #ifdef _WIN32
 
@@ -1881,11 +1898,6 @@ int linenoiseState::completeLine(char *cbuf, int *c) {
     return nread;
 }
 
-/* Register a callback function to be called for tab-completion. */
-inline void SetCompletionCallback(CompletionCallback fn) {
-    completionCallback = fn;
-}
-
 /* =========================== Line editing ================================= */
 
 /* Single line low level line refresh.
@@ -2391,6 +2403,11 @@ std::string linenoiseState::Readline() {
 /* At exit we'll try to fix the terminal to the initial conditions. */
 inline void linenoiseAtExit(void) {
     disableRawMode(STDIN_FILENO);
+
+    // If we're using the global, clean up
+    if (lglobal)
+       delete lglobal;
+    lglobal = NULL;
 }
 
 /* This is the API call to add a new entry in the linenoise history.
@@ -2453,6 +2470,65 @@ bool linenoiseState::LoadHistory(const char* path) {
     }
     return true;
 }
+
+
+
+/* Function style interface */
+void SetCompletionCallback(CompletionCallback fn){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    lglobal->SetCompletionCallback(fn);
+};
+void SetMultiLine(bool ml){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    lglobal->SetMultiLine(ml);
+};
+bool AddHistory(const char* line){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    return lglobal->AddHistory(line);
+};
+bool SetHistoryMaxLen(size_t len){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    return lglobal->SetHistoryMaxLen(len);
+};
+bool SaveHistory(const char* path){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    return lglobal->SaveHistory(path);
+};
+bool LoadHistory(const char* path){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    return lglobal->LoadHistory(path);
+};
+const std::vector<std::string>& GetHistory(){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    return lglobal->GetHistory();
+};
+bool Readline(const char *prompt, std::string& line){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    lglobal->prompt = std::string(prompt);
+    return lglobal->Readline(line);
+};
+std::string Readline(const char *prompt, bool& quit){
+    if (!lglobal)
+       lglobal = new linenoiseState();
+    lglobal->prompt = std::string(prompt);
+    std::string line;
+    quit = lglobal->Readline(line);
+    return line;
+};
+std::string Readline(const char *prompt){
+    bool quit; // dummy
+    return Readline(prompt, quit);
+};
+
+
 
 } // namespace linenoise
 
