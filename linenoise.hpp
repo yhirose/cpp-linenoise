@@ -1661,7 +1661,7 @@ static bool isUnsupportedTerm(void) {
         std::string uterm(unsupported_term[j]);
         // https://stackoverflow.com/a/313990
         std::transform(uterm.begin(), uterm.end(), uterm.begin(), [](unsigned char c){ return std::tolower(c); });
-        if (uterm == uterm)
+        if (uterm == sterm)
              return true;
     }
 #endif
