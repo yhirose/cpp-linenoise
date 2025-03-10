@@ -1939,6 +1939,9 @@ void linenoiseState::refreshSingleLine() {
     int pos = pos;
     std::string ab;
 
+    if (lcols <= 0)
+       lcols = getColumns(ifd, ofd);
+
     while((pcolwid+unicodeColumnPos(buf, pos)) >= lcols) {
         int glen = unicodeGraphemeLen(buf, len, 0);
         buf += glen;
@@ -1969,6 +1972,9 @@ void linenoiseState::refreshSingleLine() {
  * Rewrite the currently edited line accordingly to the buffer content,
  * cursor position, and number of columns of the terminal. */
 void linenoiseState::refreshMultiLine() {
+    if (lcols <= 0)
+       lcols = getColumns(ifd, ofd);
+
     char seq[64];
     int pcolwid = unicodeColumnPos(prompt.c_str(), static_cast<int>(prompt.length()));
     int colpos = unicodeColumnPosForMultiLine(buf, len, len, lcols, pcolwid);
@@ -2373,8 +2379,14 @@ bool linenoiseState::linenoiseRaw(std::string& line) {
     if (!isatty(STDIN_FILENO)) {
         /* Not a tty: read from file / pipe. */
         int c;
-        while ((c = getc(stdin)) != EOF)
-	    line += c;
+        while ((c = getc(stdin)) != EOF) {
+            if (c == '\r')  // CRLF -> LF
+               continue;
+            if (c == '\n' || c == '\r') // send command
+               break;
+
+            line += c;
+        }
         if (!line.length())
             quit = true;
 
