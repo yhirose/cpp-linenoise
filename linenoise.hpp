@@ -2020,10 +2020,12 @@ void linenoiseState::refreshMultiLine() {
 /* Calls the two low level functions refreshSingleLine() or
  * refreshMultiLine() according to the selected mode. */
 void linenoiseState::RefreshLine() {
+    r_mutex.lock();
     if (mlmode)
         refreshMultiLine();
     else
         refreshSingleLine();
+    r_mutex.unlock();
 }
 
 /* Insert the character 'c' at cursor current position.
