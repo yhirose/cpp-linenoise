@@ -2342,7 +2342,12 @@ bool linenoiseState::linenoiseRaw(std::string& line) {
 
     if (!isatty(STDIN_FILENO)) {
         /* Not a tty: read from file / pipe. */
-        std::getline(std::cin, line);
+        int c;
+        while ((c = getc(stdin)) != EOF)
+	    line += c;
+        if (!line.length())
+            quit = true;
+
     } else {
         /* Interactive editing. */
         if (enableRawMode(STDIN_FILENO) == false) {
