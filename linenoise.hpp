@@ -180,7 +180,7 @@ class linenoiseState {
         bool AddHistory(const char *line);
         bool LoadHistory(const char *path);
         bool SaveHistory(const char *path);
-        const std::vector<std::string> &GetHistory() { return l_history; };
+        const std::vector<std::string> &GetHistory() { return history_; };
         bool SetHistoryMaxLen(size_t len);
 
         bool Readline(std::string &line); // Primary linenoise entry point
@@ -188,13 +188,13 @@ class linenoiseState {
         void WipeLine(); // Temporarily removes line from screen - RefreshLine will restore
         void ClearScreen(); // Clear terminal window
 
+	void SetPrompt(const char *p);
+	void SetPrompt(std::string &p);
+
         /* Register a callback function to be called for tab-completion. */
         void SetCompletionCallback(CompletionCallback fn) {
             completionCallback = fn;
         };
-
-        std::string l_prompt = std::string("> "); /* Prompt to display. */
-        std::mutex l_mutex;
 
 	// For functional interface
 	void SetMultiLine(bool ml);
@@ -220,22 +220,24 @@ class linenoiseState {
 
         CompletionCallback completionCallback;
 
-        int l_ifd = STDIN_FILENO;          /* Terminal stdin file descriptor. */
-        int l_ofd = STDOUT_FILENO;         /* Terminal stdout file descriptor. */
-        char *l_buf = l_wbuf;                /* Edited line buffer. */
-        int l_buflen = LINENOISE_MAX_LINE; /* Edited line buffer size. */
-        int l_pos = 0;                     /* Current cursor position. */
-        int l_oldcolpos = 0;      /* Previous refresh cursor column position. */
-        int l_len = 0;            /* Current edited line length. */
-        int l_cols = -1;         /* Number of columns in terminal. */
-        int l_maxrows = 0;        /* Maximum num of rows used so far (multiline mode) */
-        int l_history_index = 0; /* The history index we are currently editing. */
-        char l_wbuf[LINENOISE_MAX_LINE] = {'\0'};
-        std::string l_history_tmpbuf;
-	bool l_mlmode = false;  /* Multi line mode. Default is single line. */
+        int ifd_ = STDIN_FILENO;          /* Terminal stdin file descriptor. */
+        int ofd_ = STDOUT_FILENO;         /* Terminal stdout file descriptor. */
+        char *buf_ = wbuf_;                /* Edited line buffer. */
+        int buf_len_ = LINENOISE_MAX_LINE; /* Edited line buffer size. */
+        int pos_ = 0;                     /* Current cursor position. */
+        int oldcolpos_ = 0;      /* Previous refresh cursor column position. */
+        int len_ = 0;            /* Current edited line length. */
+        int cols_ = -1;         /* Number of columns in terminal. */
+        int maxrows_ = 0;        /* Maximum num of rows used so far (multiline mode) */
+        int history_index_ = 0; /* The history index we are currently editing. */
+        char wbuf_[LINENOISE_MAX_LINE] = {'\0'};
+        std::string history_tmpbuf_;
+	bool mlmode_ = false;  /* Multi line mode. Default is single line. */
+        std::mutex mutex_;
+        std::string prompt_ = std::string("> "); /* Prompt to display. */
 
-        size_t l_history_max_len = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
-        std::vector<std::string> l_history;
+        size_t history_max_len_ = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
+        std::vector<std::string> history_;
 };
 
 
@@ -1639,7 +1641,7 @@ inline int unicodeReadUTF8Char(int fd, char* buf, int* cp)
 
 /* Set if to use or not the multi line mode. */
 inline void linenoiseState::SetMultiLine(bool ml) {
-    l_mlmode = ml;
+    mlmode_ = ml;
 }
 
 /* Return true if the terminal name is in the list of terminals we know are
@@ -1858,7 +1860,7 @@ inline int linenoiseState::completeLine(char *cbuf, int *c) {
     int nread = 0, nwritten;
     *c = 0;
 
-    completionCallback(l_buf,lc);
+    completionCallback(buf_,lc);
     if (lc.empty()) {
         linenoiseBeep();
     } else {
@@ -1867,27 +1869,27 @@ inline int linenoiseState::completeLine(char *cbuf, int *c) {
         while(!stop) {
             /* Show completion or original buffer */
             if (i < static_cast<int>(lc.size())) {
-                int old_len = l_len;
-                int old_pos = l_pos;
-                char *old_buf = l_buf;
-                l_len = l_pos = static_cast<int>(lc[i].size());
-                l_buf = &lc[i][0];
+                int old_len = len_;
+                int old_pos = pos_;
+                char *old_buf = buf_;
+                len_ = pos_ = static_cast<int>(lc[i].size());
+                buf_ = &lc[i][0];
                 RefreshLine();
-                l_len = old_len;
-                l_pos = old_pos;
-                l_buf = old_buf;
+                len_ = old_len;
+                pos_ = old_pos;
+                buf_ = old_buf;
 	    } else {
                 RefreshLine();
             }
 
-            //nread = read(l_ifd,&c,1);
+            //nread = read(ifd_,&c,1);
 #ifdef _WIN32
             nread = win32read(c);
             if (nread == 1) {
                 cbuf[0] = *c;
             }
 #else
-            nread = unicodeReadUTF8Char(l_ifd,cbuf,c);
+            nread = unicodeReadUTF8Char(ifd_,cbuf,c);
 #endif
             if (nread <= 0) {
                 *c = -1;
@@ -1907,8 +1909,8 @@ inline int linenoiseState::completeLine(char *cbuf, int *c) {
                 default:
                     /* Update buffer and return */
                     if (i < static_cast<int>(lc.size())) {
-                        nwritten = snprintf(l_buf,l_buflen,"%s",&lc[i][0]);
-                        l_len = l_pos = nwritten;
+                        nwritten = snprintf(buf_,buf_len_,"%s",&lc[i][0]);
+                        len_ = pos_ = nwritten;
                     }
                     stop = 1;
                     break;
@@ -1927,34 +1929,34 @@ inline int linenoiseState::completeLine(char *cbuf, int *c) {
  * cursor position, and number of columns of the terminal. */
 inline void linenoiseState::refreshSingleLine() {
     char seq[64];
-    int pcolwid = unicodeColumnPos(l_prompt.c_str(), static_cast<int>(l_prompt.length()));
-    int fd = l_ofd;
+    int pcolwid = unicodeColumnPos(prompt_.c_str(), static_cast<int>(prompt_.length()));
+    int fd = ofd_;
     std::string ab;
 
-    if (l_cols <= 0)
-       l_cols = getColumns(l_ifd, l_ofd);
+    if (cols_ <= 0)
+       cols_ = getColumns(ifd_, ofd_);
 
-    while((pcolwid+unicodeColumnPos(l_buf, l_pos)) >= l_cols) {
-        int glen = unicodeGraphemeLen(l_buf, l_len, 0);
-        l_buf += glen;
-        l_len -= glen;
-        l_pos -= glen;
+    while((pcolwid+unicodeColumnPos(buf_, pos_)) >= cols_) {
+        int glen = unicodeGraphemeLen(buf_, len_, 0);
+        buf_ += glen;
+        len_ -= glen;
+        pos_ -= glen;
     }
-    while (pcolwid+unicodeColumnPos(l_buf, l_len) > l_cols) {
-        l_len -= unicodePrevGraphemeLen(l_buf, l_len);
+    while (pcolwid+unicodeColumnPos(buf_, len_) > cols_) {
+        len_ -= unicodePrevGraphemeLen(buf_, len_);
     }
 
     /* Cursor to left edge */
     snprintf(seq,64,"\r");
     ab += seq;
     /* Write the prompt and the current buffer content */
-    ab += l_prompt;
-    ab.append(l_buf, l_len);
+    ab += prompt_;
+    ab.append(buf_, len_);
     /* Erase to right */
     snprintf(seq,64,"\x1b[0K");
     ab += seq;
     /* Move cursor to original position. */
-    snprintf(seq,64,"\r\x1b[%dC", (int)(unicodeColumnPos(l_buf, l_pos)+pcolwid));
+    snprintf(seq,64,"\r\x1b[%dC", (int)(unicodeColumnPos(buf_, pos_)+pcolwid));
     ab += seq;
     if (write(fd,ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
 }
@@ -1964,23 +1966,23 @@ inline void linenoiseState::refreshSingleLine() {
  * Rewrite the currently edited line accordingly to the buffer content,
  * cursor position, and number of columns of the terminal. */
 inline void linenoiseState::refreshMultiLine() {
-    if (l_cols <= 0)
-       l_cols = getColumns(l_ifd, l_ofd);
+    if (cols_ <= 0)
+       cols_ = getColumns(ifd_, ofd_);
 
     char seq[64];
-    int pcolwid = unicodeColumnPos(l_prompt.c_str(), static_cast<int>(l_prompt.length()));
-    int colpos = unicodeColumnPosForMultiLine(l_buf, l_len, l_len, l_cols, pcolwid);
+    int pcolwid = unicodeColumnPos(prompt_.c_str(), static_cast<int>(prompt_.length()));
+    int colpos = unicodeColumnPosForMultiLine(buf_, len_, len_, cols_, pcolwid);
     int colpos2; /* cursor column position. */
-    int rows = (pcolwid+colpos+l_cols-1)/l_cols; /* rows used by current buf. */
-    int rpos = (pcolwid+l_oldcolpos+l_cols)/l_cols; /* cursor relative row. */
+    int rows = (pcolwid+colpos+cols_-1)/cols_; /* rows used by current buf. */
+    int rpos = (pcolwid+oldcolpos_+cols_)/cols_; /* cursor relative row. */
     int rpos2; /* rpos after refresh. */
     int col; /* column position, zero-based. */
-    int old_rows = (int)l_maxrows;
-    int fd = l_ofd;
+    int old_rows = (int)maxrows_;
+    int fd = ofd_;
     std::string ab;
 
     /* Update maxrows if needed. */
-    if (rows > (int)l_maxrows) l_maxrows = rows;
+    if (rows > (int)maxrows_) maxrows_ = rows;
 
     /* First step: clear all the lines used before. To do so start by
      * going to the last row. */
@@ -2000,27 +2002,27 @@ inline void linenoiseState::refreshMultiLine() {
     ab += seq;
 
     /* Write the prompt and the current buffer content */
-    ab += l_prompt;
-    ab.append(l_buf, l_len);
+    ab += prompt_;
+    ab.append(buf_, len_);
 
     /* Get text width to cursor position */
-    colpos2 = unicodeColumnPosForMultiLine(l_buf, l_len, l_pos, l_cols, pcolwid);
+    colpos2 = unicodeColumnPosForMultiLine(buf_, len_, pos_, cols_, pcolwid);
 
     /* If we are at the very end of the screen with our prompt, we need to
      * emit a newline and move the prompt to the first column. */
-    if (l_pos &&
-        l_pos == l_len &&
-        (colpos2+pcolwid) % l_cols == 0)
+    if (pos_ &&
+        pos_ == len_ &&
+        (colpos2+pcolwid) % cols_ == 0)
     {
         ab += "\n";
         snprintf(seq,64,"\r");
         ab += seq;
         rows++;
-        if (rows > (int)l_maxrows) l_maxrows = rows;
+        if (rows > (int)maxrows_) maxrows_ = rows;
     }
 
     /* Move cursor to right position. */
-    rpos2 = (pcolwid+colpos2+l_cols)/l_cols; /* current cursor relative row. */
+    rpos2 = (pcolwid+colpos2+cols_)/cols_; /* current cursor relative row. */
 
     /* Go up till we reach the expected position. */
     if (rows-rpos2 > 0) {
@@ -2029,14 +2031,14 @@ inline void linenoiseState::refreshMultiLine() {
     }
 
     /* Set column. */
-    col = (pcolwid + colpos2) % l_cols;
+    col = (pcolwid + colpos2) % cols_;
     if (col)
         snprintf(seq,64,"\r\x1b[%dC", col);
     else
         snprintf(seq,64,"\r");
     ab += seq;
 
-    l_oldcolpos = colpos2;
+    oldcolpos_ = colpos2;
 
     if (write(fd,ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
 }
@@ -2044,41 +2046,44 @@ inline void linenoiseState::refreshMultiLine() {
 /* Calls the two low level functions refreshSingleLine() or
  * refreshMultiLine() according to the selected mode. */
 inline void linenoiseState::RefreshLine() {
-    l_mutex.lock();
-    if (l_mlmode)
+    mutex_.lock();
+    if (mlmode_)
         refreshMultiLine();
     else
         refreshSingleLine();
-    l_mutex.unlock();
+    mutex_.unlock();
 }
 
 inline void linenoiseState::WipeLine() { linenoiseWipeLine(); }
 
 inline void linenoiseState::ClearScreen() { linenoiseClearScreen(); }
 
+inline void linenoiseState::SetPrompt(const char *p) { prompt_ = std::string(p); }
+inline void linenoiseState::SetPrompt(std::string &p) { prompt_ = p; }
+
 /* Insert the character 'c' at cursor current position.
  *
  * On error writing to the terminal -1 is returned, otherwise 0. */
 inline int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
-    if (l_len < l_buflen) {
-        if (l_len == l_pos) {
-            memcpy(&l_buf[l_pos],cbuf,clen);
-            l_pos+=clen;
-            l_len+=clen;;
-            l_buf[l_len] = '\0';
-            if ((!l_mlmode && unicodeColumnPos(l_prompt.c_str(), static_cast<int>(l_prompt.length()))+unicodeColumnPos(l_buf,l_len) < l_cols) /* || l_mlmode */) {
+    if (len_ < buf_len_) {
+        if (len_ == pos_) {
+            memcpy(&buf_[pos_],cbuf,clen);
+            pos_+=clen;
+            len_+=clen;;
+            buf_[len_] = '\0';
+            if ((!mlmode_ && unicodeColumnPos(prompt_.c_str(), static_cast<int>(prompt_.length()))+unicodeColumnPos(buf_,len_) < cols_) /* || mlmode_ */) {
                 /* Avoid a full update of the line in the
                  * trivial case. */
-                if (write(l_ofd,cbuf,clen) == -1) return -1;
+                if (write(ofd_,cbuf,clen) == -1) return -1;
             } else {
                 RefreshLine();
             }
         } else {
-            memmove(l_buf+l_pos+clen,l_buf+l_pos,l_len-l_pos);
-            memcpy(&l_buf[l_pos],cbuf,clen);
-            l_pos+=clen;
-            l_len+=clen;
-            l_buf[l_len] = '\0';
+            memmove(buf_+pos_+clen,buf_+pos_,len_-pos_);
+            memcpy(&buf_[pos_],cbuf,clen);
+            pos_+=clen;
+            len_+=clen;
+            buf_[len_] = '\0';
             RefreshLine();
         }
     }
@@ -2087,32 +2092,32 @@ inline int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
 
 /* Move cursor on the left. */
 inline void linenoiseState::linenoiseEditMoveLeft() {
-    if (l_pos > 0) {
-        l_pos -= unicodePrevGraphemeLen(l_buf, l_pos);
+    if (pos_ > 0) {
+        pos_ -= unicodePrevGraphemeLen(buf_, pos_);
         RefreshLine();
     }
 }
 
 /* Move cursor on the right. */
 inline void linenoiseState::linenoiseEditMoveRight() {
-    if (l_pos != l_len) {
-        l_pos += unicodeGraphemeLen(l_buf, l_len, l_pos);
+    if (pos_ != len_) {
+        pos_ += unicodeGraphemeLen(buf_, len_, pos_);
         RefreshLine();
     }
 }
 
 /* Move cursor to the start of the line. */
 inline void linenoiseState::linenoiseEditMoveHome() {
-    if (l_pos != 0) {
-        l_pos = 0;
+    if (pos_ != 0) {
+        pos_ = 0;
         RefreshLine();
     }
 }
 
 /* Move cursor to the end of the line. */
 inline void linenoiseState::linenoiseEditMoveEnd() {
-    if (l_pos != l_len) {
-        l_pos = l_len;
+    if (pos_ != len_) {
+        pos_ = len_;
         RefreshLine();
     }
 }
@@ -2122,22 +2127,22 @@ inline void linenoiseState::linenoiseEditMoveEnd() {
 #define LINENOISE_HISTORY_NEXT 0
 #define LINENOISE_HISTORY_PREV 1
 inline void linenoiseState::linenoiseEditHistoryNext(int dir) {
-      if (l_history.size() > 1) {
+      if (history_.size() > 1) {
         /* Update the current history entry before to
          * overwrite it with the next one. */
-        l_history[l_history.size() - 1 - l_history_index] = l_buf;
+        history_[history_.size() - 1 - history_index_] = buf_;
         /* Show the new entry */
-        l_history_index += (dir == LINENOISE_HISTORY_PREV) ? 1 : -1;
-        if (l_history_index < 0) {
-            l_history_index = 0;
+        history_index_ += (dir == LINENOISE_HISTORY_PREV) ? 1 : -1;
+        if (history_index_ < 0) {
+            history_index_ = 0;
             return;
-        } else if (l_history_index >= (int)l_history.size()) {
-            l_history_index = static_cast<int>(l_history.size())-1;
+        } else if (history_index_ >= (int)history_.size()) {
+            history_index_ = static_cast<int>(history_.size())-1;
             return;
         }
-        memset(l_buf, 0, l_buflen);
-        strcpy(l_buf,l_history[l_history.size() - 1 - l_history_index].c_str());
-        l_len = l_pos = static_cast<int>(strlen(l_buf));
+        memset(buf_, 0, buf_len_);
+        strcpy(buf_,history_[history_.size() - 1 - history_index_].c_str());
+        len_ = pos_ = static_cast<int>(strlen(buf_));
         RefreshLine();
     }
 }
@@ -2145,23 +2150,23 @@ inline void linenoiseState::linenoiseEditHistoryNext(int dir) {
 /* Delete the character at the right of the cursor without altering the cursor
  * position. Basically this is what happens with the "Delete" keyboard key. */
 inline void linenoiseState::linenoiseEditDelete() {
-    if (l_len > 0 && l_pos < l_len) {
-        int glen = unicodeGraphemeLen(l_buf,l_len,l_pos);
-        memmove(l_buf+l_pos,l_buf+l_pos+glen,l_len-l_pos-glen);
-        l_len-=glen;
-        l_buf[l_len] = '\0';
+    if (len_ > 0 && pos_ < len_) {
+        int glen = unicodeGraphemeLen(buf_,len_,pos_);
+        memmove(buf_+pos_,buf_+pos_+glen,len_-pos_-glen);
+        len_-=glen;
+        buf_[len_] = '\0';
         RefreshLine();
     }
 }
 
 /* Backspace implementation. */
 inline void linenoiseState::linenoiseEditBackspace() {
-    if (l_pos > 0 && l_len > 0) {
-        int glen = unicodePrevGraphemeLen(l_buf,l_pos);
-        memmove(l_buf+l_pos-glen,l_buf+l_pos,l_len-l_pos);
-        l_pos-=glen;
-        l_len-=glen;
-        l_buf[l_len] = '\0';
+    if (pos_ > 0 && len_ > 0) {
+        int glen = unicodePrevGraphemeLen(buf_,pos_);
+        memmove(buf_+pos_-glen,buf_+pos_,len_-pos_);
+        pos_-=glen;
+        len_-=glen;
+        buf_[len_] = '\0';
         RefreshLine();
     }
 }
@@ -2169,16 +2174,16 @@ inline void linenoiseState::linenoiseEditBackspace() {
 /* Delete the previous word, maintaining the cursor at the start of the
  * current word. */
 inline void linenoiseState::linenoiseEditDeletePrevWord() {
-    int old_pos = l_pos;
+    int old_pos = pos_;
     int diff;
 
-    while (l_pos > 0 && l_buf[l_pos-1] == ' ')
-        l_pos--;
-    while (l_pos > 0 && l_buf[l_pos-1] != ' ')
-        l_pos--;
-    diff = old_pos - l_pos;
-    memmove(l_buf+l_pos,l_buf+old_pos,l_len-old_pos+1);
-    l_len -= diff;
+    while (pos_ > 0 && buf_[pos_-1] == ' ')
+        pos_--;
+    while (pos_ > 0 && buf_[pos_-1] != ' ')
+        pos_--;
+    diff = old_pos - pos_;
+    memmove(buf_+pos_,buf_+old_pos,len_-old_pos+1);
+    len_ -= diff;
     RefreshLine();
 }
 
@@ -2196,7 +2201,7 @@ inline int linenoiseState::linenoiseEdit()
      * initially is just an empty string. */
     AddHistory("");
 
-    if (write(l_ofd, l_prompt.c_str(), static_cast<int>(l_prompt.length())) == -1) return -1;
+    if (write(ofd_, prompt_.c_str(), static_cast<int>(prompt_.length())) == -1) return -1;
     while(1) {
         int c;
         char cbuf[4];
@@ -2209,9 +2214,9 @@ inline int linenoiseState::linenoiseEdit()
             cbuf[0] = c;
         }
 #else
-        nread = unicodeReadUTF8Char(l_ifd,cbuf,&c);
+        nread = unicodeReadUTF8Char(ifd_,cbuf,&c);
 #endif
-        if (nread <= 0) return (int)l_len;
+        if (nread <= 0) return (int)len_;
 
         /* Only autocomplete when the callback is set. It returns < 0 when
          * there was an error reading from fd. Otherwise it will return the
@@ -2219,16 +2224,16 @@ inline int linenoiseState::linenoiseEdit()
         if (c == 9 && completionCallback != NULL) {
             nread = completeLine(cbuf,&c);
             /* Return on errors */
-            if (c < 0) return l_len;
+            if (c < 0) return len_;
             /* Read next character when 0 */
             if (c == 0) continue;
         }
 
         switch(c) {
         case ENTER:    /* enter */
-            if (!l_history.empty()) l_history.pop_back();
-            if (l_mlmode) linenoiseEditMoveEnd();
-            return (int)l_len;
+            if (!history_.empty()) history_.pop_back();
+            if (mlmode_) linenoiseEditMoveEnd();
+            return (int)len_;
         case CTRL_C:     /* ctrl-c */
             errno = EAGAIN;
             return -1;
@@ -2238,19 +2243,19 @@ inline int linenoiseState::linenoiseEdit()
             break;
         case CTRL_D:     /* ctrl-d, remove char at right of cursor, or if the
                             line is empty, act as end-of-file. */
-            if (l_len > 0) {
+            if (len_ > 0) {
                 linenoiseEditDelete();
             } else {
-                l_history.pop_back();
+                history_.pop_back();
                 return -1;
             }
             break;
         case CTRL_T:    /* ctrl-t, swaps current character with previous. */
-            if (l_pos > 0 && l_pos < l_len) {
-                char aux = l_wbuf[l_pos-1];
-                l_wbuf[l_pos-1] = l_wbuf[l_pos];
-                l_wbuf[l_pos] = aux;
-                if (l_pos != l_len-1) l_pos++;
+            if (pos_ > 0 && pos_ < len_) {
+                char aux = wbuf_[pos_-1];
+                wbuf_[pos_-1] = wbuf_[pos_];
+                wbuf_[pos_] = aux;
+                if (pos_ != len_-1) pos_++;
                 RefreshLine();
             }
             break;
@@ -2270,14 +2275,14 @@ inline int linenoiseState::linenoiseEdit()
             /* Read the next two bytes representing the escape sequence.
              * Use two calls to handle slow terminals returning the two
              * chars at different times. */
-            if (read(l_ifd,seq,1) == -1) break;
-            if (read(l_ifd,seq+1,1) == -1) break;
+            if (read(ifd_,seq,1) == -1) break;
+            if (read(ifd_,seq+1,1) == -1) break;
 
             /* ESC [ sequences. */
             if (seq[0] == '[') {
                 if (seq[1] >= '0' && seq[1] <= '9') {
                     /* Extended escape, read additional byte. */
-                    if (read(l_ifd,seq+2,1) == -1) break;
+                    if (read(ifd_,seq+2,1) == -1) break;
                     if (seq[2] == '~') {
                         switch(seq[1]) {
                         case '3': /* Delete key. */
@@ -2325,13 +2330,13 @@ inline int linenoiseState::linenoiseEdit()
             if (linenoiseEditInsert(cbuf,nread)) return -1;
             break;
         case CTRL_U: /* Ctrl+u, delete the whole line. */
-            l_wbuf[0] = '\0';
-            l_pos = l_len = 0;
+            wbuf_[0] = '\0';
+            pos_ = len_ = 0;
             RefreshLine();
             break;
         case CTRL_K: /* Ctrl+k, delete from current to end of line. */
-            l_wbuf[l_pos] = '\0';
-            l_len = l_pos;
+            wbuf_[pos_] = '\0';
+            len_ = pos_;
             RefreshLine();
             break;
         case CTRL_A: /* Ctrl+a, go to the start of the line */
@@ -2349,7 +2354,7 @@ inline int linenoiseState::linenoiseEdit()
             break;
         }
     }
-    return l_len;
+    return len_;
 }
 
 /* This function calls the line editing function linenoiseEdit() using
@@ -2379,16 +2384,16 @@ inline bool linenoiseState::linenoiseRaw(std::string& line) {
 
 	/* Buffer starts empty.  Since we're potentially
 	 * reusing the state, we need to reset these. */
-	l_pos = 0;
-	l_len = 0;
-	l_buf[0] = '\0';
-	l_wbuf[0] = '\0';
+	pos_ = 0;
+	len_ = 0;
+	buf_[0] = '\0';
+	wbuf_[0] = '\0';
 
         auto count = linenoiseEdit();
         if (count == -1) {
             quit = true;
         } else {
-            line.assign(l_buf, count);
+            line.assign(buf_, count);
         }
 
         disableRawMode(STDIN_FILENO);
@@ -2400,14 +2405,15 @@ inline bool linenoiseState::linenoiseRaw(std::string& line) {
 inline linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int stdout_fd) {
     /* Populate the linenoise state that we pass to functions implementing
      * specific editing functionalities. */
-    l_ifd = stdin_fd;
-    l_ofd = stdout_fd;
-    l_buf = l_wbuf;
-    l_prompt = (prompt_str) ? std::string(prompt_str) : std::string("> ");
+    ifd_ = stdin_fd;
+    ofd_ = stdout_fd;
+    buf_ = wbuf_;
+    std::string p = (prompt_str) ? std::string(prompt_str) : std::string("> ");
+    SetPrompt(p);
 
     /* Buffer starts empty. */
-    l_buf[0] = '\0';
-    l_buflen--; /* Make sure there is always space for the nulterm */
+    buf_[0] = '\0';
+    buf_len_--; /* Make sure there is always space for the nulterm */
 }
 
 inline void linenoiseState::EnableMultiLine() { SetMultiLine(true); }
@@ -2420,7 +2426,7 @@ inline void linenoiseState::DisableMultiLine() { SetMultiLine(false); }
  * something even in the most desperate of the conditions. */
 inline bool linenoiseState::Readline(std::string& line) {
     if (isUnsupportedTerm()) {
-        printf("%s", l_prompt.c_str());
+        printf("%s", prompt_.c_str());
         fflush(stdout);
         std::getline(std::cin, line);
         return false;
@@ -2462,16 +2468,16 @@ inline void linenoiseAtExit(void) {
  *
  * Using a circular buffer is smarter, but a bit more complex to handle. */
 inline bool linenoiseState::AddHistory(const char* line) {
-    if (l_history_max_len == 0) return false;
+    if (history_max_len_ == 0) return false;
 
     /* Don't add duplicated lines. */
-    if (!l_history.empty() && l_history.back() == line) return false;
+    if (!history_.empty() && history_.back() == line) return false;
 
     /* If we reached the max length, remove the older line. */
-    if (l_history.size() == l_history_max_len) {
-        l_history.erase(l_history.begin());
+    if (history_.size() == history_max_len_) {
+        history_.erase(history_.begin());
     }
-    l_history.push_back(line);
+    history_.push_back(line);
 
     return true;
 }
@@ -2482,9 +2488,9 @@ inline bool linenoiseState::AddHistory(const char* line) {
  * than the amount of items already inside the history. */
 inline bool linenoiseState::SetHistoryMaxLen(size_t mlen) {
     if (mlen < 1) return false;
-    l_history_max_len = mlen;
-    if (mlen < l_history.size()) {
-        l_history.resize(mlen);
+    history_max_len_ = mlen;
+    if (mlen < history_.size()) {
+        history_.resize(mlen);
     }
     return true;
 }
@@ -2494,7 +2500,7 @@ inline bool linenoiseState::SetHistoryMaxLen(size_t mlen) {
 inline bool linenoiseState::SaveHistory(const char* path) {
     std::ofstream f(path); // TODO: need 'std::ios::binary'?
     if (!f) return false;
-    for (const auto& h: l_history) {
+    for (const auto& h: history_) {
         f << h << std::endl;
     }
     return true;
@@ -2556,13 +2562,13 @@ inline const std::vector<std::string>& GetHistory(){
 inline bool Readline(const char *prompt, std::string& line){
     if (!lglobal)
        lglobal = new linenoiseState();
-    lglobal->l_prompt = std::string(prompt);
+    lglobal->SetPrompt(prompt);
     return lglobal->Readline(line);
 };
 inline std::string Readline(const char *prompt, bool& quit){
     if (!lglobal)
        lglobal = new linenoiseState();
-    lglobal->l_prompt = std::string(prompt);
+    lglobal->SetPrompt(prompt);
     std::string line;
     quit = lglobal->Readline(line);
     return line;
