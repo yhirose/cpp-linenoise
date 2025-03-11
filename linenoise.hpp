@@ -203,17 +203,17 @@ class linenoiseState {
         std::string Readline(bool &quit);
         std::string Readline();
 
-        bool linenoiseRaw(std::string &line);
-        int linenoiseEditInsert(const char *cbuf, int clen);
-	void linenoiseEditDelete();
-        void linenoiseEditBackspace();
-        void linenoiseEditDeletePrevWord();
-        int linenoiseEdit();
-	void linenoiseEditHistoryNext(int dir);
-	void linenoiseEditMoveLeft();
-        void linenoiseEditMoveRight();
-        void linenoiseEditMoveHome();
-        void linenoiseEditMoveEnd();
+        bool Raw(std::string &line);
+        int EditInsert(const char *cbuf, int clen);
+	void EditDelete();
+        void EditBackspace();
+        void EditDeletePrevWord();
+        int Edit();
+	void EditHistoryNext(int dir);
+	void EditMoveLeft();
+        void EditMoveRight();
+        void EditMoveHome();
+        void EditMoveEnd();
         void refreshSingleLine();
         void refreshMultiLine();
         int completeLine(char *cbuf, int *c);
@@ -1849,7 +1849,7 @@ inline void linenoiseBeep(void) {
 
 /* ============================== Completion ================================ */
 
-/* This is an helper function for linenoiseEdit() and is called when the
+/* This is an helper function for Edit() and is called when the
  * user types the <tab> key in order to complete the string currently in the
  * input.
  *
@@ -2064,7 +2064,7 @@ inline void linenoiseState::SetPrompt(std::string &p) { prompt_ = p; }
 /* Insert the character 'c' at cursor current position.
  *
  * On error writing to the terminal -1 is returned, otherwise 0. */
-inline int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
+inline int linenoiseState::EditInsert(const char* cbuf, int clen) {
     if (len_ < buf_len_) {
         if (len_ == pos_) {
             memcpy(&buf_[pos_],cbuf,clen);
@@ -2091,7 +2091,7 @@ inline int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
 }
 
 /* Move cursor on the left. */
-inline void linenoiseState::linenoiseEditMoveLeft() {
+inline void linenoiseState::EditMoveLeft() {
     if (pos_ > 0) {
         pos_ -= unicodePrevGraphemeLen(buf_, pos_);
         RefreshLine();
@@ -2099,7 +2099,7 @@ inline void linenoiseState::linenoiseEditMoveLeft() {
 }
 
 /* Move cursor on the right. */
-inline void linenoiseState::linenoiseEditMoveRight() {
+inline void linenoiseState::EditMoveRight() {
     if (pos_ != len_) {
         pos_ += unicodeGraphemeLen(buf_, len_, pos_);
         RefreshLine();
@@ -2107,7 +2107,7 @@ inline void linenoiseState::linenoiseEditMoveRight() {
 }
 
 /* Move cursor to the start of the line. */
-inline void linenoiseState::linenoiseEditMoveHome() {
+inline void linenoiseState::EditMoveHome() {
     if (pos_ != 0) {
         pos_ = 0;
         RefreshLine();
@@ -2115,7 +2115,7 @@ inline void linenoiseState::linenoiseEditMoveHome() {
 }
 
 /* Move cursor to the end of the line. */
-inline void linenoiseState::linenoiseEditMoveEnd() {
+inline void linenoiseState::EditMoveEnd() {
     if (pos_ != len_) {
         pos_ = len_;
         RefreshLine();
@@ -2126,7 +2126,7 @@ inline void linenoiseState::linenoiseEditMoveEnd() {
  * entry as specified by 'dir'. */
 #define LINENOISE_HISTORY_NEXT 0
 #define LINENOISE_HISTORY_PREV 1
-inline void linenoiseState::linenoiseEditHistoryNext(int dir) {
+inline void linenoiseState::EditHistoryNext(int dir) {
       if (history_.size() > 1) {
         /* Update the current history entry before to
          * overwrite it with the next one. */
@@ -2149,7 +2149,7 @@ inline void linenoiseState::linenoiseEditHistoryNext(int dir) {
 
 /* Delete the character at the right of the cursor without altering the cursor
  * position. Basically this is what happens with the "Delete" keyboard key. */
-inline void linenoiseState::linenoiseEditDelete() {
+inline void linenoiseState::EditDelete() {
     if (len_ > 0 && pos_ < len_) {
         int glen = unicodeGraphemeLen(buf_,len_,pos_);
         memmove(buf_+pos_,buf_+pos_+glen,len_-pos_-glen);
@@ -2160,7 +2160,7 @@ inline void linenoiseState::linenoiseEditDelete() {
 }
 
 /* Backspace implementation. */
-inline void linenoiseState::linenoiseEditBackspace() {
+inline void linenoiseState::EditBackspace() {
     if (pos_ > 0 && len_ > 0) {
         int glen = unicodePrevGraphemeLen(buf_,pos_);
         memmove(buf_+pos_-glen,buf_+pos_,len_-pos_);
@@ -2173,7 +2173,7 @@ inline void linenoiseState::linenoiseEditBackspace() {
 
 /* Delete the previous word, maintaining the cursor at the start of the
  * current word. */
-inline void linenoiseState::linenoiseEditDeletePrevWord() {
+inline void linenoiseState::EditDeletePrevWord() {
     int old_pos = pos_;
     int diff;
 
@@ -2195,7 +2195,7 @@ inline void linenoiseState::linenoiseEditDeletePrevWord() {
  * when ctrl+d is typed.
  *
  * The function returns the length of the current buffer. */
-inline int linenoiseState::linenoiseEdit()
+inline int linenoiseState::Edit()
 {
     /* The latest history entry is always our current buffer, that
      * initially is just an empty string. */
@@ -2232,19 +2232,19 @@ inline int linenoiseState::linenoiseEdit()
         switch(c) {
         case ENTER:    /* enter */
             if (!history_.empty()) history_.pop_back();
-            if (mlmode_) linenoiseEditMoveEnd();
+            if (mlmode_) EditMoveEnd();
             return (int)len_;
         case CTRL_C:     /* ctrl-c */
             errno = EAGAIN;
             return -1;
         case BACKSPACE:   /* backspace */
         case 8:     /* ctrl-h */
-            linenoiseEditBackspace();
+            EditBackspace();
             break;
         case CTRL_D:     /* ctrl-d, remove char at right of cursor, or if the
                             line is empty, act as end-of-file. */
             if (len_ > 0) {
-                linenoiseEditDelete();
+                EditDelete();
             } else {
                 history_.pop_back();
                 return -1;
@@ -2260,16 +2260,16 @@ inline int linenoiseState::linenoiseEdit()
             }
             break;
         case CTRL_B:     /* ctrl-b */
-            linenoiseEditMoveLeft();
+            EditMoveLeft();
             break;
         case CTRL_F:     /* ctrl-f */
-            linenoiseEditMoveRight();
+            EditMoveRight();
             break;
         case CTRL_P:    /* ctrl-p */
-            linenoiseEditHistoryNext(LINENOISE_HISTORY_PREV);
+            EditHistoryNext(LINENOISE_HISTORY_PREV);
             break;
         case CTRL_N:    /* ctrl-n */
-            linenoiseEditHistoryNext(LINENOISE_HISTORY_NEXT);
+            EditHistoryNext(LINENOISE_HISTORY_NEXT);
             break;
         case ESC:    /* escape sequence */
             /* Read the next two bytes representing the escape sequence.
@@ -2286,29 +2286,29 @@ inline int linenoiseState::linenoiseEdit()
                     if (seq[2] == '~') {
                         switch(seq[1]) {
                         case '3': /* Delete key. */
-                            linenoiseEditDelete();
+                            EditDelete();
                             break;
                         }
                     }
                 } else {
                     switch(seq[1]) {
                     case 'A': /* Up */
-                        linenoiseEditHistoryNext(LINENOISE_HISTORY_PREV);
+                        EditHistoryNext(LINENOISE_HISTORY_PREV);
                         break;
                     case 'B': /* Down */
-                        linenoiseEditHistoryNext(LINENOISE_HISTORY_NEXT);
+                        EditHistoryNext(LINENOISE_HISTORY_NEXT);
                         break;
                     case 'C': /* Right */
-                        linenoiseEditMoveRight();
+                        EditMoveRight();
                         break;
                     case 'D': /* Left */
-                        linenoiseEditMoveLeft();
+                        EditMoveLeft();
                         break;
                     case 'H': /* Home */
-                        linenoiseEditMoveHome();
+                        EditMoveHome();
                         break;
                     case 'F': /* End*/
-                        linenoiseEditMoveEnd();
+                        EditMoveEnd();
                         break;
                     }
                 }
@@ -2318,16 +2318,16 @@ inline int linenoiseState::linenoiseEdit()
             else if (seq[0] == 'O') {
                 switch(seq[1]) {
                 case 'H': /* Home */
-                    linenoiseEditMoveHome();
+                    EditMoveHome();
                     break;
                 case 'F': /* End*/
-                    linenoiseEditMoveEnd();
+                    EditMoveEnd();
                     break;
                 }
             }
             break;
         default:
-            if (linenoiseEditInsert(cbuf,nread)) return -1;
+            if (EditInsert(cbuf,nread)) return -1;
             break;
         case CTRL_U: /* Ctrl+u, delete the whole line. */
             wbuf_[0] = '\0';
@@ -2340,26 +2340,26 @@ inline int linenoiseState::linenoiseEdit()
             RefreshLine();
             break;
         case CTRL_A: /* Ctrl+a, go to the start of the line */
-            linenoiseEditMoveHome();
+            EditMoveHome();
             break;
         case CTRL_E: /* ctrl+e, go to the end of the line */
-            linenoiseEditMoveEnd();
+            EditMoveEnd();
             break;
         case CTRL_L: /* ctrl+l, clear screen */
             linenoiseClearScreen();
             RefreshLine();
             break;
         case CTRL_W: /* ctrl+w, delete previous word */
-            linenoiseEditDeletePrevWord();
+            EditDeletePrevWord();
             break;
         }
     }
     return len_;
 }
 
-/* This function calls the line editing function linenoiseEdit() using
+/* This function calls the line editing function Edit() using
  * the STDIN file descriptor set in raw mode. */
-inline bool linenoiseState::linenoiseRaw(std::string& line) {
+inline bool linenoiseState::Raw(std::string& line) {
     bool quit = false;
 
     if (!isatty(STDIN_FILENO)) {
@@ -2389,7 +2389,7 @@ inline bool linenoiseState::linenoiseRaw(std::string& line) {
 	buf_[0] = '\0';
 	wbuf_[0] = '\0';
 
-        auto count = linenoiseEdit();
+        auto count = Edit();
         if (count == -1) {
             quit = true;
         } else {
@@ -2431,7 +2431,7 @@ inline bool linenoiseState::Readline(std::string& line) {
         std::getline(std::cin, line);
         return false;
     } else {
-        return linenoiseRaw(line);
+        return Raw(line);
     }
 
     return false;
