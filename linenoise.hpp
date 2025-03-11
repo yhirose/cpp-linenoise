@@ -151,6 +151,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <map>
 #include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
@@ -177,6 +178,7 @@ class linenoiseState {
         void DisableMultiLine();
 
         bool AddHistory(const char *line);
+        bool AddHistory(std::string &line);
         bool LoadHistory(const char *path);
         bool SaveHistory(const char *path);
         const std::vector<std::string> &GetHistory() { return history_; };
@@ -225,15 +227,15 @@ class linenoiseState {
         int len_ = 0;            /* Current edited line length. */
         int cols_ = -1;         /* Number of columns in terminal. */
         int maxrows_ = 0;        /* Maximum num of rows used so far (multiline mode) */
-        int history_index_ = 0; /* The history index we are currently editing. */
+        long int history_index_ = -INT_MAX; /* The history index we are currently editing. */
         char wbuf_[LINENOISE_MAX_LINE] = {'\0'};
-        std::string history_tmpbuf_;
 	bool mlmode_ = false;  /* Multi line mode. Default is single line. */
         std::mutex mutex_;
         std::string prompt_ = std::string("> "); /* Prompt to display. */
 
         size_t history_max_len_ = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
         std::vector<std::string> history_;
+        std::map<long int, std::string> history_tmpbufs_;
 };
 
 
@@ -2118,24 +2120,45 @@ inline void linenoiseState::EditMoveEnd() {
 #define LINENOISE_HISTORY_NEXT 0
 #define LINENOISE_HISTORY_PREV 1
 inline void linenoiseState::EditHistoryNext(int dir) {
-      if (history_.size() > 1) {
-        /* Update the current history entry before to
-         * overwrite it with the next one. */
-        history_[history_.size() - 1 - history_index_] = buf_;
-        /* Show the new entry */
-        history_index_ += (dir == LINENOISE_HISTORY_PREV) ? 1 : -1;
-        if (history_index_ < 0) {
-            history_index_ = 0;
-            return;
-        } else if (history_index_ >= (int)history_.size()) {
-            history_index_ = static_cast<int>(history_.size())-1;
-            return;
-        }
-        memset(buf_, 0, buf_len_);
-        strcpy(buf_,history_[history_.size() - 1 - history_index_].c_str());
-        len_ = pos_ = static_cast<int>(strlen(buf_));
-        RefreshLine();
-    }
+      long int index_cnt = static_cast<long int>(history_.size());
+      // If we have no history, there's nothing to do
+      if (!index_cnt)
+          return;
+
+      // Whatever index we're on, stash a working copy of the string
+      history_tmpbufs_[history_index_] = std::string(buf_);
+
+      // Now that we've stored the current state, adjust our index
+      history_index_ += (dir == LINENOISE_HISTORY_PREV) ? -1 : 1;
+
+      // If we've gone down past the last history entry, circle back
+      // around to the current working line
+      if (history_index_ < 0)
+          history_index_ = index_cnt;
+
+      // If we went up past the working line, circle back to the first
+      // history entry
+      if (history_index_ > index_cnt)
+          history_index_ = 0;
+
+      // Now we have the new history_index, so make sure this one also
+      // has a temporary buffer
+      if (history_tmpbufs_.find(history_index_) == history_tmpbufs_.end()) {
+         if (history_index_ == index_cnt) {
+	    // buf_ holds the current line
+	    history_tmpbufs_[history_index_] = std::string(buf_);
+         } else {
+	    // For older historical lines, make a temporary copy for modding
+	    history_tmpbufs_[history_index_] = history_[history_index_];
+         }
+      }
+
+      // Put the currently selected history line's temporary
+      // string contents into the buffer
+      memset(buf_, 0, buf_len_);
+      strcpy(buf_, history_tmpbufs_[history_index_].c_str());
+      len_ = pos_ = static_cast<int>(strlen(buf_));
+      RefreshLine();
 }
 
 /* Delete the character at the right of the cursor without altering the cursor
@@ -2188,10 +2211,6 @@ inline void linenoiseState::EditDeletePrevWord() {
  * The function returns the length of the current buffer. */
 inline int linenoiseState::Edit()
 {
-    /* The latest history entry is always our current buffer, that
-     * initially is just an empty string. */
-    AddHistory("");
-
     if (write(ofd_, prompt_.c_str(), static_cast<int>(prompt_.length())) == -1) return -1;
     while(1) {
         int c;
@@ -2222,7 +2241,6 @@ inline int linenoiseState::Edit()
 
         switch(c) {
         case ENTER:    /* enter */
-            if (!history_.empty()) history_.pop_back();
             if (mlmode_) EditMoveEnd();
             return (int)len_;
         case CTRL_C:     /* ctrl-c */
@@ -2458,19 +2476,33 @@ inline void linenoiseAtExit(void) {
  * histories, but will work well for a few hundred of entries.
  *
  * Using a circular buffer is smarter, but a bit more complex to handle. */
-inline bool linenoiseState::AddHistory(const char* line) {
+inline bool linenoiseState::AddHistory(std::string &line) {
+    // Clear the temporary copies
+    history_tmpbufs_.clear();
+    history_index_ = static_cast<long int>(history_.size());
     if (history_max_len_ == 0) return false;
+    if (!line.length()) return false;
 
-    /* Don't add duplicated lines. */
-    if (!history_.empty() && history_.back() == line) return false;
+    /* Don't add duplicate lines. */
+    if (history_.size() && history_[history_.size() - 1] == line)
+       return false;
 
     /* If we reached the max length, remove the older line. */
-    if (history_.size() == history_max_len_) {
-        history_.erase(history_.begin());
-    }
+    if (history_.size() == history_max_len_)
+        history_.pop_back();
+
+    /* Checks passed - add the line */
     history_.push_back(line);
 
+    /* Update the index to the new "working" line value */
+    history_index_ = static_cast<long int>(history_.size());
+
     return true;
+}
+
+inline bool linenoiseState::AddHistory(const char *line) {
+    std::string l(line);
+    return AddHistory(l);
 }
 
 /* Set the maximum length for the history. This function can be called even
