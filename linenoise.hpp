@@ -232,6 +232,7 @@ class linenoiseState {
         int l_history_index = LINENOISE_HISTORY_DO_SETUP; /* The history index we are currently editing. */
         char l_wbuf[LINENOISE_MAX_LINE] = {'\0'};
         std::string l_history_tmpbuf;
+	bool l_mlmode = false;  /* Multi line mode. Default is single line. */
 
         size_t l_history_max_len = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
         std::vector<std::string> l_history;
@@ -1150,14 +1151,10 @@ inline int win32_write(int fd, const void *buffer, unsigned int count) {
 }
 #endif // _WIN32
 
-static const char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
-static CompletionCallback completionCallback;
-
 #ifndef _WIN32
 static struct termios orig_termios; /* In order to restore at exit.*/
 #endif
 static bool rawmode = false; /* For atexit() function to check if restore is needed*/
-static bool mlmode = false;  /* Multi line mode. Default is single line. */
 static bool atexit_registered = false; /* Register atexit just 1 time. */
 
 enum KEY_ACTION {
@@ -1642,12 +1639,13 @@ inline int unicodeReadUTF8Char(int fd, char* buf, int* cp)
 
 /* Set if to use or not the multi line mode. */
 inline void linenoiseState::SetMultiLine(bool ml) {
-    mlmode = ml;
+    l_mlmode = ml;
 }
 
 /* Return true if the terminal name is in the list of terminals we know are
  * not able to understand basic escape sequences. */
 inline bool isUnsupportedTerm(void) {
+    static const char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
 #ifndef _WIN32
     char *term = getenv("TERM");
     int j;
@@ -2047,7 +2045,7 @@ inline void linenoiseState::refreshMultiLine() {
  * refreshMultiLine() according to the selected mode. */
 inline void linenoiseState::RefreshLine() {
     l_mutex.lock();
-    if (mlmode)
+    if (l_mlmode)
         refreshMultiLine();
     else
         refreshSingleLine();
@@ -2068,7 +2066,7 @@ inline int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
             l_pos+=clen;
             l_len+=clen;;
             l_buf[l_len] = '\0';
-            if ((!mlmode && unicodeColumnPos(l_prompt.c_str(), static_cast<int>(l_prompt.length()))+unicodeColumnPos(l_buf,l_len) < l_cols) /* || mlmode */) {
+            if ((!l_mlmode && unicodeColumnPos(l_prompt.c_str(), static_cast<int>(l_prompt.length()))+unicodeColumnPos(l_buf,l_len) < l_cols) /* || l_mlmode */) {
                 /* Avoid a full update of the line in the
                  * trivial case. */
                 if (write(l_ofd,cbuf,clen) == -1) return -1;
@@ -2253,7 +2251,7 @@ inline int linenoiseState::linenoiseEdit()
             l_history_index = LINENOISE_HISTORY_DO_SETUP;
             if (l_history.size() == l_history_max_len)
                l_history.pop_back();
-            if (mlmode)
+            if (l_mlmode)
                 linenoiseEditMoveEnd();
             return (int)l_len;
         case CTRL_C:     /* ctrl-c */
