@@ -1647,7 +1647,7 @@ void linenoiseState::SetMultiLine(bool ml) {
 
 /* Return true if the terminal name is in the list of terminals we know are
  * not able to understand basic escape sequences. */
-static bool isUnsupportedTerm(void) {
+inline bool isUnsupportedTerm(void) {
 #ifndef _WIN32
     char *term = getenv("TERM");
     int j;
