@@ -196,9 +196,6 @@ class linenoiseState {
             completionCallback = fn;
         };
 
-	// For functional interface
-	void SetMultiLine(bool ml);
-
     private:
         std::string Readline(bool &quit);
         std::string Readline();
@@ -1639,11 +1636,6 @@ inline int unicodeReadUTF8Char(int fd, char* buf, int* cp)
 
 /* ======================= Low level terminal handling ====================== */
 
-/* Set if to use or not the multi line mode. */
-inline void linenoiseState::SetMultiLine(bool ml) {
-    mlmode_ = ml;
-}
-
 /* Return true if the terminal name is in the list of terminals we know are
  * not able to understand basic escape sequences. */
 inline bool isUnsupportedTerm(void) {
@@ -2416,8 +2408,8 @@ inline linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int 
     buf_len_--; /* Make sure there is always space for the nulterm */
 }
 
-inline void linenoiseState::EnableMultiLine() { SetMultiLine(true); }
-inline void linenoiseState::DisableMultiLine() { SetMultiLine(false); }
+inline void linenoiseState::EnableMultiLine() { mlmode_ = true; }
+inline void linenoiseState::DisableMultiLine() { mlmode_ = false; }
 
 /* The high level function that is the main API of the linenoise library.
  * This function checks if the terminal has basic capabilities, just checking
@@ -2532,7 +2524,11 @@ inline void SetCompletionCallback(CompletionCallback fn){
 inline void SetMultiLine(bool ml){
     if (!lglobal)
        lglobal = new linenoiseState();
-    lglobal->SetMultiLine(ml);
+    if (ml) {
+        lglobal->EnableMultiLine();
+    } else {
+        lglobal->DisableMultiLine();
+    }
 };
 inline bool AddHistory(const char* line){
     if (!lglobal)
