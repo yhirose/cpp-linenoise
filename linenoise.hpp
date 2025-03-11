@@ -238,7 +238,7 @@ class linenoiseState {
 
 
 /* Older style public API */
-linenoiseState *lglobal = NULL;
+static linenoiseState *lglobal = NULL;
 void SetCompletionCallback(CompletionCallback fn);
 void SetMultiLine(bool ml);
 bool AddHistory(const char* line);
@@ -1641,7 +1641,7 @@ inline int unicodeReadUTF8Char(int fd, char* buf, int* cp)
 /* ======================= Low level terminal handling ====================== */
 
 /* Set if to use or not the multi line mode. */
-void linenoiseState::SetMultiLine(bool ml) {
+inline void linenoiseState::SetMultiLine(bool ml) {
     mlmode = ml;
 }
 
@@ -1855,7 +1855,7 @@ inline void linenoiseBeep(void) {
  *
  * The state of the editing is encapsulated into the pointed linenoiseState
  * structure as described in the structure definition. */
-int linenoiseState::completeLine(char *cbuf, int *c) {
+inline int linenoiseState::completeLine(char *cbuf, int *c) {
     std::vector<std::string> lc;
     int nread = 0, nwritten;
     *c = 0;
@@ -1927,7 +1927,7 @@ int linenoiseState::completeLine(char *cbuf, int *c) {
  *
  * Rewrite the currently edited line accordingly to the buffer content,
  * cursor position, and number of columns of the terminal. */
-void linenoiseState::refreshSingleLine() {
+inline void linenoiseState::refreshSingleLine() {
     char seq[64];
     int pcolwid = unicodeColumnPos(prompt.c_str(), static_cast<int>(prompt.length()));
     int fd = ofd;
@@ -1965,7 +1965,7 @@ void linenoiseState::refreshSingleLine() {
  *
  * Rewrite the currently edited line accordingly to the buffer content,
  * cursor position, and number of columns of the terminal. */
-void linenoiseState::refreshMultiLine() {
+inline void linenoiseState::refreshMultiLine() {
     if (lcols <= 0)
        lcols = getColumns(ifd, ofd);
 
@@ -2045,7 +2045,7 @@ void linenoiseState::refreshMultiLine() {
 
 /* Calls the two low level functions refreshSingleLine() or
  * refreshMultiLine() according to the selected mode. */
-void linenoiseState::RefreshLine() {
+inline void linenoiseState::RefreshLine() {
     r_mutex.lock();
     if (mlmode)
         refreshMultiLine();
@@ -2054,14 +2054,14 @@ void linenoiseState::RefreshLine() {
     r_mutex.unlock();
 }
 
-void linenoiseState::WipeLine() { linenoiseWipeLine(); }
+inline void linenoiseState::WipeLine() { linenoiseWipeLine(); }
 
-void linenoiseState::ClearScreen() { linenoiseClearScreen(); }
+inline void linenoiseState::ClearScreen() { linenoiseClearScreen(); }
 
 /* Insert the character 'c' at cursor current position.
  *
  * On error writing to the terminal -1 is returned, otherwise 0. */
-int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
+inline int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
     if (len < buflen) {
         if (len == pos) {
             memcpy(&buf[pos],cbuf,clen);
@@ -2088,7 +2088,7 @@ int linenoiseState::linenoiseEditInsert(const char* cbuf, int clen) {
 }
 
 /* Move cursor on the left. */
-void linenoiseState::linenoiseEditMoveLeft() {
+inline void linenoiseState::linenoiseEditMoveLeft() {
     if (pos > 0) {
         pos -= unicodePrevGraphemeLen(buf, pos);
         RefreshLine();
@@ -2096,7 +2096,7 @@ void linenoiseState::linenoiseEditMoveLeft() {
 }
 
 /* Move cursor on the right. */
-void linenoiseState::linenoiseEditMoveRight() {
+inline void linenoiseState::linenoiseEditMoveRight() {
     if (pos != len) {
         pos += unicodeGraphemeLen(buf, len, pos);
         RefreshLine();
@@ -2104,7 +2104,7 @@ void linenoiseState::linenoiseEditMoveRight() {
 }
 
 /* Move cursor to the start of the line. */
-void linenoiseState::linenoiseEditMoveHome() {
+inline void linenoiseState::linenoiseEditMoveHome() {
     if (pos != 0) {
         pos = 0;
         RefreshLine();
@@ -2112,7 +2112,7 @@ void linenoiseState::linenoiseEditMoveHome() {
 }
 
 /* Move cursor to the end of the line. */
-void linenoiseState::linenoiseEditMoveEnd() {
+inline void linenoiseState::linenoiseEditMoveEnd() {
     if (pos != len) {
         pos = len;
         RefreshLine();
@@ -2123,7 +2123,7 @@ void linenoiseState::linenoiseEditMoveEnd() {
  * entry as specified by 'dir'. */
 #define LINENOISE_HISTORY_NEXT 0
 #define LINENOISE_HISTORY_PREV 1
-void linenoiseState::linenoiseEditHistoryNext(int dir) {
+inline void linenoiseState::linenoiseEditHistoryNext(int dir) {
     int history_size = static_cast<int>(history.size());
     if (!history_size)
         return;
@@ -2155,7 +2155,7 @@ void linenoiseState::linenoiseEditHistoryNext(int dir) {
 
 /* Delete the character at the right of the cursor without altering the cursor
  * position. Basically this is what happens with the "Delete" keyboard key. */
-void linenoiseState::linenoiseEditDelete() {
+inline void linenoiseState::linenoiseEditDelete() {
     if (len > 0 && pos < len) {
         int glen = unicodeGraphemeLen(buf,len,pos);
         memmove(buf+pos,buf+pos+glen,len-pos-glen);
@@ -2166,7 +2166,7 @@ void linenoiseState::linenoiseEditDelete() {
 }
 
 /* Backspace implementation. */
-void linenoiseState::linenoiseEditBackspace() {
+inline void linenoiseState::linenoiseEditBackspace() {
     if (pos > 0 && len > 0) {
         int glen = unicodePrevGraphemeLen(buf,pos);
         memmove(buf+pos-glen,buf+pos,len-pos);
@@ -2179,7 +2179,7 @@ void linenoiseState::linenoiseEditBackspace() {
 
 /* Delete the previous word, maintaining the cursor at the start of the
  * current word. */
-void linenoiseState::linenoiseEditDeletePrevWord() {
+inline void linenoiseState::linenoiseEditDeletePrevWord() {
     int old_pos = pos;
     int diff;
 
@@ -2201,7 +2201,7 @@ void linenoiseState::linenoiseEditDeletePrevWord() {
  * when ctrl+d is typed.
  *
  * The function returns the length of the current buffer. */
-int linenoiseState::linenoiseEdit()
+inline int linenoiseState::linenoiseEdit()
 {
     if (write(ofd, prompt.c_str(), static_cast<int>(prompt.length())) == -1) return -1;
     while(1) {
@@ -2364,7 +2364,7 @@ int linenoiseState::linenoiseEdit()
 
 /* This function calls the line editing function linenoiseEdit() using
  * the STDIN file descriptor set in raw mode. */
-bool linenoiseState::linenoiseRaw(std::string& line) {
+inline bool linenoiseState::linenoiseRaw(std::string& line) {
     bool quit = false;
 
     if (!isatty(STDIN_FILENO)) {
@@ -2407,7 +2407,7 @@ bool linenoiseState::linenoiseRaw(std::string& line) {
     return quit;
 }
 
-linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int stdout_fd) {
+inline linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int stdout_fd) {
     /* Populate the linenoise state that we pass to functions implementing
      * specific editing functionalities. */
     ifd = stdin_fd;
@@ -2420,15 +2420,15 @@ linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int stdout_
     buflen--; /* Make sure there is always space for the nulterm */
 }
 
-void linenoiseState::EnableMultiLine() { SetMultiLine(true); }
-void linenoiseState::DisableMultiLine() { SetMultiLine(false); }
+inline void linenoiseState::EnableMultiLine() { SetMultiLine(true); }
+inline void linenoiseState::DisableMultiLine() { SetMultiLine(false); }
 
 /* The high level function that is the main API of the linenoise library.
  * This function checks if the terminal has basic capabilities, just checking
  * for a blacklist of stupid terminals, and later either calls the line
  * editing function or uses dummy fgets() so that you will be able to type
  * something even in the most desperate of the conditions. */
-bool linenoiseState::Readline(std::string& line) {
+inline bool linenoiseState::Readline(std::string& line) {
     if (isUnsupportedTerm()) {
         printf("%s",prompt.c_str());
         fflush(stdout);
@@ -2441,13 +2441,13 @@ bool linenoiseState::Readline(std::string& line) {
     return false;
 }
 
-std::string linenoiseState::Readline(bool& quit) {
+inline std::string linenoiseState::Readline(bool& quit) {
     std::string line;
     quit = Readline(line);
     return line;
 }
 
-std::string linenoiseState::Readline() {
+inline std::string linenoiseState::Readline() {
     bool quit; // dummy
     return Readline(quit);
 }
@@ -2471,7 +2471,7 @@ inline void linenoiseAtExit(void) {
  * histories, but will work well for a few hundred of entries.
  *
  * Using a circular buffer is smarter, but a bit more complex to handle. */
-bool linenoiseState::AddHistory(const char* line) {
+inline bool linenoiseState::AddHistory(const char* line) {
     if (history_max_len == 0)
        return false;
     if (!line || !strlen(line))
@@ -2493,7 +2493,7 @@ bool linenoiseState::AddHistory(const char* line) {
  * if there is already some history, the function will make sure to retain
  * just the latest 'len' elements if the new history length value is smaller
  * than the amount of items already inside the history. */
-bool linenoiseState::SetHistoryMaxLen(size_t mlen) {
+inline bool linenoiseState::SetHistoryMaxLen(size_t mlen) {
     if (mlen < 1) return false;
     history_max_len = mlen;
     if (mlen < history.size()) {
@@ -2504,7 +2504,7 @@ bool linenoiseState::SetHistoryMaxLen(size_t mlen) {
 
 /* Save the history in the specified file. On success *true* is returned
  * otherwise *false* is returned. */
-bool linenoiseState::SaveHistory(const char* path) {
+inline bool linenoiseState::SaveHistory(const char* path) {
     std::ofstream f(path); // TODO: need 'std::ios::binary'?
     if (!f) return false;
     for (const auto& h: history) {
@@ -2518,7 +2518,7 @@ bool linenoiseState::SaveHistory(const char* path) {
  *
  * If the file exists and the operation succeeded *true* is returned, otherwise
  * on error *false* is returned. */
-bool linenoiseState::LoadHistory(const char* path) {
+inline bool linenoiseState::LoadHistory(const char* path) {
     std::ifstream f(path);
     if (!f) return false;
     std::string line;
@@ -2531,48 +2531,48 @@ bool linenoiseState::LoadHistory(const char* path) {
 
 
 /* Function style interface */
-void SetCompletionCallback(CompletionCallback fn){
+inline void SetCompletionCallback(CompletionCallback fn){
     if (!lglobal)
        lglobal = new linenoiseState();
     lglobal->SetCompletionCallback(fn);
 };
-void SetMultiLine(bool ml){
+inline void SetMultiLine(bool ml){
     if (!lglobal)
        lglobal = new linenoiseState();
     lglobal->SetMultiLine(ml);
 };
-bool AddHistory(const char* line){
+inline bool AddHistory(const char* line){
     if (!lglobal)
        lglobal = new linenoiseState();
     return lglobal->AddHistory(line);
 };
-bool SetHistoryMaxLen(size_t len){
+inline bool SetHistoryMaxLen(size_t len){
     if (!lglobal)
        lglobal = new linenoiseState();
     return lglobal->SetHistoryMaxLen(len);
 };
-bool SaveHistory(const char* path){
+inline bool SaveHistory(const char* path){
     if (!lglobal)
        lglobal = new linenoiseState();
     return lglobal->SaveHistory(path);
 };
-bool LoadHistory(const char* path){
+inline bool LoadHistory(const char* path){
     if (!lglobal)
        lglobal = new linenoiseState();
     return lglobal->LoadHistory(path);
 };
-const std::vector<std::string>& GetHistory(){
+inline const std::vector<std::string>& GetHistory(){
     if (!lglobal)
        lglobal = new linenoiseState();
     return lglobal->GetHistory();
 };
-bool Readline(const char *prompt, std::string& line){
+inline bool Readline(const char *prompt, std::string& line){
     if (!lglobal)
        lglobal = new linenoiseState();
     lglobal->prompt = std::string(prompt);
     return lglobal->Readline(line);
 };
-std::string Readline(const char *prompt, bool& quit){
+inline std::string Readline(const char *prompt, bool& quit){
     if (!lglobal)
        lglobal = new linenoiseState();
     lglobal->prompt = std::string(prompt);
@@ -2580,7 +2580,7 @@ std::string Readline(const char *prompt, bool& quit){
     quit = lglobal->Readline(line);
     return line;
 };
-std::string Readline(const char *prompt){
+inline std::string Readline(const char *prompt){
     bool quit; // dummy
     return Readline(prompt, quit);
 };
