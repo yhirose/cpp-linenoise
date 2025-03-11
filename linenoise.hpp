@@ -163,7 +163,6 @@ namespace linenoise {
 
 #define LINENOISE_DEFAULT_HISTORY_MAX_LEN 100
 #define LINENOISE_MAX_LINE 4096
-#define LINENOISE_HISTORY_DO_SETUP -INT_MAX
 
 typedef std::function<void (const char*, std::vector<std::string>&)> CompletionCallback;
 
