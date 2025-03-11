@@ -7,22 +7,14 @@ int main(int argc, const char** argv)
 {
     const auto path = "history.txt";
 
-#ifdef _WIN32
-    const char *prompt = "hello> ";
-#else
-    const char *prompt = "\033[32mこんにちは\x1b[0m> ";
-#endif
-
-    linenoise::linenoiseState l(prompt);
-
     // Enable the multi-line mode
-    l.EnableMultiLine();
+    linenoise::SetMultiLine(true);
 
     // Set max length of the history
-    l.SetHistoryMaxLen(4);
+    linenoise::SetHistoryMaxLen(4);
 
     // Setup completion words every time when a user types
-    l.SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
+    linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
         if (editBuffer[0] == 'h') {
 #ifdef _WIN32
             completions.push_back("hello こんにちは");
@@ -35,11 +27,15 @@ int main(int argc, const char** argv)
     });
 
     // Load history
-    l.LoadHistory(path);
+    linenoise::LoadHistory(path);
 
     while (true) {
         std::string line;
-        auto quit = l.Readline(line);
+#ifdef _WIN32
+        auto quit = linenoise::Readline("hello> ", line);
+#else
+        auto quit = linenoise::Readline("\033[32mこんにちは\x1b[0m> ", line);
+#endif
 
         if (quit) {
             break;
@@ -48,10 +44,10 @@ int main(int argc, const char** argv)
         cout <<  "echo: '" << line << "'" << endl;
 
         // Add line to history
-        l.AddHistory(line.c_str());
+        linenoise::AddHistory(line.c_str());
 
         // Save history
-        l.SaveHistory(path);
+        linenoise::SaveHistory(path);
     }
 
     return 0;
