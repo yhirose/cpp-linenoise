@@ -1,44 +1,26 @@
-# Compiled Object files
-*.slo
-*.lo
+# Build directories
+build/
+Debug/
+Release/
+
+# Compiled objects and executables
 *.o
 *.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-
-# Fortran module files
-*.mod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
 *.exe
 *.out
 *.app
-
-# Others
 *.dSYM
+
+# Editors
 *.swp
-Debug
-Release
-*.suo
-*.sdf
-*.user
 xcuserdata
 *.xcworkspace
-Makefile
-CMakeFiles
-CMakeCache.txt
-*.cmake
+
+# Unicode Character Database download cache (scripts/gen_unicode_tables.py)
+.ucd-cache/
+
+# Upstream scratch checkout
+.upstream/
+
+# Example artifacts
 history.txt

@@ -1,8 +1,6 @@
-#include "../linenoise.hpp"
+#include "linenoise.hpp"
 
 void f2()
 {
-    linenoise::linenoiseState l("p2");
-    l.EnableMultiLine();
+    linenoise::SetMultiLine(false);
 }
-

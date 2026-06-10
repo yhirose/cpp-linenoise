@@ -1,20 +1,55 @@
 cpp-linenoise
 =============
 
-Multi-platform (Unix, Windows) C++ header-only linenoise-based readline library.
+[![test](https://github.com/yhirose/cpp-linenoise/actions/workflows/test.yml/badge.svg)](https://github.com/yhirose/cpp-linenoise/actions/workflows/test.yml)
 
-This library gathered code from following excellent libraries, clean it up, and put it into a C++ header file for convenience.
+Multi-platform (Unix, Windows) C++17 header-only readline library, derived
+from [antirez/linenoise](https://github.com/antirez/linenoise).
 
- * `linenoise.h` and `linenoise.c` ([antirez/linenoise](https://github.com/antirez/linenoise))
- * `ANSI.c` ([adoxa/ansicon](https://github.com/adoxa/ansicon))
- * `Win32_ANSI.h` and `Win32_ANSI.c` ([MSOpenTech/redis](https://github.com/MSOpenTech/redis))
+Features
+--------
 
-The licenses for the libraries are included in `linenoise.hpp`.
+ * Single header file, no dependencies. Just include `linenoise.hpp`.
+ * Full Unicode support:
+   - Extended grapheme cluster segmentation ([UAX #29]) — cursor movement,
+     backspace and delete treat emoji ZWJ sequences (👩‍👩‍👧‍👦), flags (🇯🇵),
+     combining marks, Hangul jamo and Indic conjuncts as single characters.
+   - Correct display widths ([UAX #11] East Asian Width + emoji), so CJK
+     text and emoji render and scroll correctly in single and multi line
+     mode. Generated from Unicode 17.0 data.
+ * Works in Windows Terminal and the Windows 10+ console through the native
+   virtual terminal mode (no ANSI emulation layer; on older consoles it
+   degrades to plain line input).
+ * Everything the original linenoise does: history, tab completion, hints,
+   multi-line editing, mask (password) mode, and bracketed paste with
+   display folding for large or multi-line pastes.
+
+[UAX #29]: https://unicode.org/reports/tr29/
+[UAX #11]: https://unicode.org/reports/tr11/
+
+Relationship to linenoise
+-------------------------
+
+This is a derived implementation, not a wrapper: the editing engine (key
+handling, single/multi line refresh, history, completion, hints, paste
+folding) is a function-by-function C++ port of upstream linenoise that is
+meant to track it (last synced with commit `a473823`, 2026-05-02), while
+two layers are original to this project:
+
+ * The Unicode layer replaces upstream's heuristic UTF-8 handling with
+   full UAX #29 grapheme cluster segmentation and UCD-generated width
+   tables, validated against the official `GraphemeBreakTest.txt`.
+ * The platform layer abstracts terminal I/O so the same engine runs on
+   POSIX termios and the Windows console.
+
+Deliberate behavior differences from upstream: Ctrl-C removes the
+temporary history entry instead of leaking it, and a Regional Indicator
+pair (flag emoji) counts as 2 columns rather than 4.
 
 Usage
 -----
 
-```c++
+```cpp
 #include "linenoise.hpp"
 
 ...
@@ -22,18 +57,29 @@ Usage
 const auto path = "history.txt";
 
 // Setup completion words every time when a user types
-linenoise::SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
-    if (editBuffer[0] == 'h') {
-        completions.push_back("hello");
-        completions.push_back("hello there");
-    }
-});
+linenoise::SetCompletionCallback(
+    [](const char* editBuffer, std::vector<std::string>& completions) {
+        if (editBuffer[0] == 'h') {
+            completions.push_back("hello");
+            completions.push_back("hello there");
+        }
+    });
+
+// Show a hint at the right of the prompt while typing
+linenoise::SetHintsCallback(
+    [](const char* editBuffer, int& color, bool& bold) -> std::string {
+        if (std::string(editBuffer) == "git remote add") {
+            color = 35;
+            return " <name> <url>";
+        }
+        return {};
+    });
 
 // Enable the multi-line mode
 linenoise::SetMultiLine(true);
 
 // Set max length of the history
-linenoise::SetHistoryMaxLen(4);
+linenoise::SetHistoryMaxLen(100);
 
 // Load history
 linenoise::LoadHistory(path);
@@ -47,7 +93,7 @@ while (true) {
         break;
     }
 
-    cout <<  "echo: '" << line << "'" << endl;
+    std::cout << "echo: '" << line << "'" << std::endl;
 
     // Add text to history
     linenoise::AddHistory(line.c_str());
@@ -60,36 +106,120 @@ linenoise::SaveHistory(path);
 API
 ---
 
-```c++
+```cpp
 namespace linenoise;
 
+// Line editing. Returns true when the user wants to quit
+// (Ctrl-C, or Ctrl-D on an empty line).
+bool Readline(const char* prompt, std::string& line);
+std::string Readline(const char* prompt, bool& quit);
 std::string Readline(const char* prompt);
 
+// Multi-line mode (default: single line)
 void SetMultiLine(bool multiLineMode);
 
-typedef std::function<void (const char* editBuffer, std::vector<std::string>& completions)> CompletionCallback;
+// Mask mode: echo '*' instead of the typed characters (for passwords)
+void EnableMaskMode();
+void DisableMaskMode();
 
+// Completion
+using CompletionCallback =
+    std::function<void(const char* editBuffer, std::vector<std::string>& completions)>;
 void SetCompletionCallback(CompletionCallback fn);
 
+// Hints shown at the right of the cursor. Return an empty string for no
+// hint; 'color' is an ANSI color code (e.g. 35 = magenta).
+using HintsCallback =
+    std::function<std::string(const char* editBuffer, int& color, bool& bold)>;
+void SetHintsCallback(HintsCallback fn);
+
+// History
 bool SetHistoryMaxLen(size_t len);
-
 bool LoadHistory(const char* path);
-
 bool SaveHistory(const char* path);
-
 bool AddHistory(const char* line);
-
 const std::vector<std::string>& GetHistory();
+
+// Misc
+void ClearScreen();
+void HideLine(); // temporarily hide the edited line (to print async output)
+void ShowLine(); // show it again
 ```
 
-Tested compilers
-----------------
+Key bindings
+------------
 
-  * Visual Studio 2015
-  * Clang 3.5
-  * GCC 6.3.1
+| Key                  | Action                                        |
+| -------------------- | --------------------------------------------- |
+| Left, Right          | Move cursor by one grapheme cluster           |
+| Up, Down / Ctrl-P, N | History navigation                            |
+| Home, End / Ctrl-A, E| Start / end of line                           |
+| Backspace, Delete    | Delete one grapheme cluster                   |
+| Tab                  | Cycle completions (Esc cancels)               |
+| Ctrl-B, F            | Move left / right                             |
+| Ctrl-T               | Swap the two clusters around the cursor       |
+| Ctrl-U               | Delete the whole line                         |
+| Ctrl-K               | Delete to end of line                         |
+| Ctrl-W               | Delete previous word                          |
+| Ctrl-L               | Clear screen                                  |
+| Ctrl-C               | Cancel (Readline returns quit = true)         |
+| Ctrl-D               | Delete right, or EOF on an empty line         |
+
+Pasting multi-line or very large text shows a folded `[... N pasted lines
+...]` marker while keeping the real bytes in the line buffer (requires a
+terminal with bracketed paste, such as Windows Terminal, iTerm2, or any
+modern Unix terminal).
+
+Platform notes
+--------------
+
+- **Unix/macOS**: any VT100-compatible terminal. `TERM=dumb` and friends
+  fall back to plain line input.
+- **Windows**: requires the virtual terminal support of Windows 10 or
+  later (Windows Terminal, conhost, ConEmu, etc.). Input is read with
+  `ReadConsoleW`, so Unicode input works regardless of the console code
+  page. On consoles without VT support the library falls back to plain
+  line input.
+
+Building
+--------
+
+`linenoise.hpp` is self-contained — copy it into your project and include
+it. CMake users can also use the interface target:
+
+```cmake
+add_subdirectory(cpp-linenoise)
+target_link_libraries(your_app PRIVATE linenoise)
+```
+
+C++17 or later is required.
+
+Regenerating the Unicode tables
+-------------------------------
+
+The grapheme cluster / width tables embedded in `linenoise.hpp` are
+generated from the Unicode Character Database:
+
+```bash
+python3 scripts/gen_unicode_tables.py --update linenoise.hpp \
+    --test-out test/grapheme_break_test.inc
+```
+
+Tests
+-----
+
+```bash
+cmake -B build
+cmake --build build
+ctest --test-dir build
+```
+
+The test suite includes all official Unicode `GraphemeBreakTest.txt` cases
+and drives the editing engine in-process through pipes.
 
 License
 -------
 
-BSD license (© 2015 Yuji Hirose)
+BSD license (© 2015-2026 Yuji Hirose; original linenoise © 2010-2023
+Salvatore Sanfilippo and Pieter Noordhuis). See `linenoise.hpp` for the
+full text.

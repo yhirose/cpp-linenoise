@@ -1,13 +1,11 @@
-cmake_minimum_required(VERSION 3.0)
-include_directories(.)
-add_definitions("-std=c++1y")
-
 add_executable(example example.cpp)
-add_executable(example_old example_old.cpp)
+target_link_libraries(example PRIVATE linenoise)
 
+# Verify that including the header from multiple translation units links
+# cleanly (the library state must be shared, not duplicated).
 add_executable(multiinclude
-       	multiinclude/main.cpp
-       	multiinclude/f1.cpp
-       	multiinclude/f2.cpp
+    multiinclude/main.cpp
+    multiinclude/f1.cpp
+    multiinclude/f2.cpp
 )
-
+target_link_libraries(multiinclude PRIVATE linenoise)

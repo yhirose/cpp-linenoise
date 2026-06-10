@@ -1,27 +1,33 @@
 /*
  *  linenoise.hpp -- Multi-platform C++ header-only linenoise library.
  *
- *  All credits and commendations have to go to the authors of the
- *  following excellent libraries.
+ *  A C++17 implementation derived from antirez/linenoise. The editing
+ *  engine is a function-by-function port that tracks upstream (last
+ *  synced with commit a473823, 2026-05-02); original to this project are:
+ *   - Full Unicode extended grapheme cluster support (UAX #29) and
+ *     display width handling (UAX #11 East Asian Width + emoji),
+ *     replacing upstream's heuristic UTF-8 handling.
+ *   - Native Windows support via the Windows console virtual terminal
+ *     mode (Windows 10+ / Windows Terminal). No ANSI emulation layer.
+ *   - A thin C++ API on top of the original linenoise editing engine.
  *
- *  - linenoise.h and linenoise.c (https://github.com/antirez/linenoise)
- *  - ANSI.c (https://github.com/adoxa/ansicon)
- *  - Win32_ANSI.h and Win32_ANSI.c (https://github.com/MSOpenTech/redis)
+ *  All credits and commendations have to go to the authors of the
+ *  original library: https://github.com/antirez/linenoise
  *
  * ------------------------------------------------------------------------
  *
- *  Copyright (c) 2015 yhirose
+ *  Copyright (c) 2015-2026 yhirose
  *  All rights reserved.
- *  
+ *
  *  Redistribution and use in source and binary forms, with or without
  *  modification, are permitted provided that the following conditions are met:
- *  
+ *
  *  1. Redistributions of source code must retain the above copyright notice, this
  *     list of conditions and the following disclaimer.
  *  2. Redistributions in binary form must reproduce the above copyright notice,
  *     this list of conditions and the following disclaimer in the documentation
  *     and/or other materials provided with the distribution.
- *  
+ *
  *  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
  *  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
@@ -34,15 +40,13 @@
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/* linenoise.h -- guerrilla line editing library against the idea that a
+/* linenoise.c -- guerrilla line editing library against the idea that a
  * line editing lib needs to be 20,000 lines of C code.
- *
- * See linenoise.c for more information.
  *
  * ------------------------------------------------------------------------
  *
- * Copyright (c) 2010, Salvatore Sanfilippo <antirez at gmail dot com>
- * Copyright (c) 2010, Pieter Noordhuis <pcnoordhuis at gmail dot com>
+ * Copyright (c) 2010-2023, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2010-2013, Pieter Noordhuis <pcnoordhuis at gmail dot com>
  *
  * All rights reserved.
  *
@@ -70,1637 +74,965 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * ANSI.c - ANSI escape sequence console driver.
- *
- * Copyright (C) 2005-2014 Jason Hood
- * This software is provided 'as-is', without any express or implied
- * warranty.  In no event will the author be held liable for any damages
- * arising from the use of this software.
- * 
- * Permission is granted to anyone to use this software for any purpose,
- * including commercial applications, and to alter it and redistribute it
- * freely, subject to the following restrictions:
- * 
- * 1. The origin of this software must not be misrepresented; you must not
- *    claim that you wrote the original software. If you use this software
- *    in a product, an acknowledgment in the product documentation would be
- *    appreciated but is not required.
- * 2. Altered source versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.
- * 3. This notice may not be removed or altered from any source distribution.
- * 
- * Jason Hood
- * jadoxa@yahoo.com.au
- */
-
-/*
- * Win32_ANSI.h and Win32_ANSI.c
- *
- * Derived from ANSI.c by Jason Hood, from his ansicon project (https://github.com/adoxa/ansicon), with modifications.
- *
- * Copyright (c), Microsoft Open Technologies, Inc.
- * All rights reserved.
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *  - Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- *  - Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
 #ifndef LINENOISE_HPP
 #define LINENOISE_HPP
 
 #ifndef _WIN32
+#include <strings.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
-
-// termios.h defines CR0..CR3, NL0..NL1, TAB0..TAB3, BS0..BS1, FF0..FF1,
-// VT0..VT1 as numeric constants for output-mode delay flags. These names
-// are not part of linenoise's API, but they leak into every translation
-// unit that includes this header and clash with downstream code that
-// uses them as identifiers (e.g. LLVM's ConstantRange.h takes parameters
-// named CR1/CR2). Drop them here so this header doesn't pollute callers.
-#undef CR0
-#undef CR1
-#undef CR2
-#undef CR3
-#undef NL0
-#undef NL1
-#undef TAB0
-#undef TAB1
-#undef TAB2
-#undef TAB3
-#undef BS0
-#undef BS1
-#undef FF0
-#undef FF1
-#undef VT0
-#undef VT1
 #else
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <Windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #include <io.h>
 #ifndef STDIN_FILENO
-#define STDIN_FILENO (_fileno(stdin))
+#define STDIN_FILENO 0
 #endif
 #ifndef STDOUT_FILENO
 #define STDOUT_FILENO 1
 #endif
-#define isatty _isatty
-#define write win32_write
-#define read _read
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
+#endif /* _WIN32 */
+
 #include <algorithm>
 #include <cctype>
-#include <errno.h>
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <iostream>
-#include <mutex>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <string>
-#include <sys/types.h>
 #include <vector>
 
 namespace linenoise {
 
+/* Editing limits. Can be overridden before including this header. */
+#ifndef LINENOISE_DEFAULT_HISTORY_MAX_LEN
 #define LINENOISE_DEFAULT_HISTORY_MAX_LEN 100
-#define LINENOISE_MAX_LINE 4096
+#endif
+#ifndef LINENOISE_MAX_LINE
+#define LINENOISE_MAX_LINE (1024 * 1024)
+#endif
+#ifndef LINENOISE_PASTE_FOLD_THRESHOLD
+#define LINENOISE_PASTE_FOLD_THRESHOLD 200 /* Min bytes to fold a one-line paste. */
+#endif
 
-typedef std::function<void (const char*, std::vector<std::string>&)> CompletionCallback;
+/* ========================== Unicode support =============================== *
+ * Extended grapheme cluster segmentation (UAX #29) and display width
+ * (wcwidth-style, based on East Asian Width and emoji properties), driven
+ * by compact range tables generated from the Unicode Character Database
+ * by scripts/gen_unicode_tables.py.
+ */
+namespace unicode {
 
-/* The linenoiseState structure represents the state during line editing, and
- * provides methods by which user programs can act on that state. */
-class linenoiseState {
-    public:
-        linenoiseState(const char *prompt = NULL, int stdin_fd = STDIN_FILENO,
-                int stdout_fd = STDOUT_FILENO);
-
-        void EnableMultiLine();
-        void DisableMultiLine();
-
-        bool AddHistory(const char *line);
-        bool LoadHistory(const char *path);
-        bool SaveHistory(const char *path);
-        const std::vector<std::string> &GetHistory() { return history_; };
-        bool SetHistoryMaxLen(size_t len);
-
-        bool Readline(std::string &line); // Primary linenoise entry point
-        void RefreshLine(); // Restore current line
-        void WipeLine(); // Temporarily removes line from screen - RefreshLine will restore
-        void ClearScreen(); // Clear terminal window
-
-	void SetPrompt(const char *p);
-	void SetPrompt(std::string &p);
-
-        /* Register a callback function to be called for tab-completion. */
-        void SetCompletionCallback(CompletionCallback fn) {
-            completionCallback = fn;
-        };
-
-    private:
-        std::string Readline(bool &quit);
-        std::string Readline();
-
-        bool Raw(std::string &line);
-        int EditInsert(const char *cbuf, int clen);
-	void EditDelete();
-        void EditBackspace();
-        void EditDeletePrevWord();
-        int Edit();
-	void EditHistoryNext(int dir);
-	void EditMoveLeft();
-        void EditMoveRight();
-        void EditMoveHome();
-        void EditMoveEnd();
-        void refreshSingleLine();
-        void refreshMultiLine();
-        int completeLine(char *cbuf, int *c);
-
-        CompletionCallback completionCallback;
-
-        int ifd_ = STDIN_FILENO;          /* Terminal stdin file descriptor. */
-        int ofd_ = STDOUT_FILENO;         /* Terminal stdout file descriptor. */
-        char *buf_ = wbuf_;                /* Edited line buffer. */
-        int buf_len_ = LINENOISE_MAX_LINE; /* Edited line buffer size. */
-        int pos_ = 0;                     /* Current cursor position. */
-        int oldcolpos_ = 0;      /* Previous refresh cursor column position. */
-        int len_ = 0;            /* Current edited line length. */
-        int cols_ = -1;         /* Number of columns in terminal. */
-        int maxrows_ = 0;        /* Maximum num of rows used so far (multiline mode) */
-        int history_index_ = 0; /* The history index we are currently editing. */
-        char wbuf_[LINENOISE_MAX_LINE] = {'\0'};
-        std::string history_tmpbuf_;
-	bool mlmode_ = false;  /* Multi line mode. Default is single line. */
-        std::mutex mutex_;
-        std::string prompt_ = std::string("> "); /* Prompt to display. */
-
-        size_t history_max_len_ = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
-        std::vector<std::string> history_;
+/* Grapheme_Cluster_Break classes (bits 0-3 of CharProp::val). */
+enum class GCB : uint8_t {
+    Other = 0,
+    CR = 1,
+    LF = 2,
+    Control = 3,
+    Extend = 4,
+    ZWJ = 5,
+    RegionalIndicator = 6,
+    Prepend = 7,
+    SpacingMark = 8,
+    L = 9,
+    V = 10,
+    T = 11,
+    LV = 12,
+    LVT = 13,
 };
 
+/* Indic_Conjunct_Break classes (bits 5-6 of CharProp::val). */
+enum class InCB : uint8_t { None = 0, Consonant = 1, Extend = 2, Linker = 3 };
 
-/* Older style public API */
-static linenoiseState *lglobal = NULL;
-void SetCompletionCallback(CompletionCallback fn);
-void SetMultiLine(bool ml);
-bool AddHistory(const char* line);
-bool SetHistoryMaxLen(size_t len);
-bool SaveHistory(const char* path);
-bool LoadHistory(const char* path);
-const std::vector<std::string>& GetHistory();
-bool Readline(const char *prompt, std::string& line);
-std::string Readline(const char *prompt, bool& quit);
-std::string Readline(const char *prompt);
+/* Width classes (bits 7-8 of CharProp::val). */
+enum class WidthClass : uint8_t { Default = 0, Zero = 1, Wide = 2 };
 
+inline constexpr uint16_t ExtPictFlag = 1 << 4;
+
+struct CharProp {
+    uint32_t lo;
+    uint32_t hi;
+    uint16_t val;
+};
+
+// {{{ unicode-tables (generated by scripts/gen_unicode_tables.py, Unicode 17.0.0)
+// Unicode 17.0.0. 987 ranges.
+inline const CharProp char_props[] = {
+    {0x0,0x9,0x3}, {0xA,0xA,0x2}, {0xB,0xC,0x3}, {0xD,0xD,0x1},
+    {0xE,0x1F,0x3}, {0x7F,0x9F,0x3}, {0xA9,0xA9,0x10}, {0xAD,0xAD,0x3},
+    {0xAE,0xAE,0x10}, {0x300,0x36F,0xC4}, {0x483,0x489,0xC4}, {0x591,0x5BD,0xC4},
+    {0x5BF,0x5BF,0xC4}, {0x5C1,0x5C2,0xC4}, {0x5C4,0x5C5,0xC4}, {0x5C7,0x5C7,0xC4},
+    {0x600,0x605,0x87}, {0x610,0x61A,0xC4}, {0x61C,0x61C,0x83}, {0x64B,0x65F,0xC4},
+    {0x670,0x670,0xC4}, {0x6D6,0x6DC,0xC4}, {0x6DD,0x6DD,0x87}, {0x6DF,0x6E4,0xC4},
+    {0x6E7,0x6E8,0xC4}, {0x6EA,0x6ED,0xC4}, {0x70F,0x70F,0x87}, {0x711,0x711,0xC4},
+    {0x730,0x74A,0xC4}, {0x7A6,0x7B0,0xC4}, {0x7EB,0x7F3,0xC4}, {0x7FD,0x7FD,0xC4},
+    {0x816,0x819,0xC4}, {0x81B,0x823,0xC4}, {0x825,0x827,0xC4}, {0x829,0x82D,0xC4},
+    {0x859,0x85B,0xC4}, {0x890,0x891,0x87}, {0x897,0x89F,0xC4}, {0x8CA,0x8E1,0xC4},
+    {0x8E2,0x8E2,0x87}, {0x8E3,0x902,0xC4}, {0x903,0x903,0x8}, {0x915,0x939,0x20},
+    {0x93A,0x93A,0xC4}, {0x93B,0x93B,0x8}, {0x93C,0x93C,0xC4}, {0x93E,0x940,0x8},
+    {0x941,0x948,0xC4}, {0x949,0x94C,0x8}, {0x94D,0x94D,0xE4}, {0x94E,0x94F,0x8},
+    {0x951,0x957,0xC4}, {0x958,0x95F,0x20}, {0x962,0x963,0xC4}, {0x978,0x97F,0x20},
+    {0x981,0x981,0xC4}, {0x982,0x983,0x8}, {0x995,0x9A8,0x20}, {0x9AA,0x9B0,0x20},
+    {0x9B2,0x9B2,0x20}, {0x9B6,0x9B9,0x20}, {0x9BC,0x9BC,0xC4}, {0x9BE,0x9BE,0x44},
+    {0x9BF,0x9C0,0x8}, {0x9C1,0x9C4,0xC4}, {0x9C7,0x9C8,0x8}, {0x9CB,0x9CC,0x8},
+    {0x9CD,0x9CD,0xE4}, {0x9D7,0x9D7,0x44}, {0x9DC,0x9DD,0x20}, {0x9DF,0x9DF,0x20},
+    {0x9E2,0x9E3,0xC4}, {0x9F0,0x9F1,0x20}, {0x9FE,0x9FE,0xC4}, {0xA01,0xA02,0xC4},
+    {0xA03,0xA03,0x8}, {0xA3C,0xA3C,0xC4}, {0xA3E,0xA40,0x8}, {0xA41,0xA42,0xC4},
+    {0xA47,0xA48,0xC4}, {0xA4B,0xA4D,0xC4}, {0xA51,0xA51,0xC4}, {0xA70,0xA71,0xC4},
+    {0xA75,0xA75,0xC4}, {0xA81,0xA82,0xC4}, {0xA83,0xA83,0x8}, {0xA95,0xAA8,0x20},
+    {0xAAA,0xAB0,0x20}, {0xAB2,0xAB3,0x20}, {0xAB5,0xAB9,0x20}, {0xABC,0xABC,0xC4},
+    {0xABE,0xAC0,0x8}, {0xAC1,0xAC5,0xC4}, {0xAC7,0xAC8,0xC4}, {0xAC9,0xAC9,0x8},
+    {0xACB,0xACC,0x8}, {0xACD,0xACD,0xE4}, {0xAE2,0xAE3,0xC4}, {0xAF9,0xAF9,0x20},
+    {0xAFA,0xAFF,0xC4}, {0xB01,0xB01,0xC4}, {0xB02,0xB03,0x8}, {0xB15,0xB28,0x20},
+    {0xB2A,0xB30,0x20}, {0xB32,0xB33,0x20}, {0xB35,0xB39,0x20}, {0xB3C,0xB3C,0xC4},
+    {0xB3E,0xB3E,0x44}, {0xB3F,0xB3F,0xC4}, {0xB40,0xB40,0x8}, {0xB41,0xB44,0xC4},
+    {0xB47,0xB48,0x8}, {0xB4B,0xB4C,0x8}, {0xB4D,0xB4D,0xE4}, {0xB55,0xB56,0xC4},
+    {0xB57,0xB57,0x44}, {0xB5C,0xB5D,0x20}, {0xB5F,0xB5F,0x20}, {0xB62,0xB63,0xC4},
+    {0xB71,0xB71,0x20}, {0xB82,0xB82,0xC4}, {0xBBE,0xBBE,0x44}, {0xBBF,0xBBF,0x8},
+    {0xBC0,0xBC0,0xC4}, {0xBC1,0xBC2,0x8}, {0xBC6,0xBC8,0x8}, {0xBCA,0xBCC,0x8},
+    {0xBCD,0xBCD,0xC4}, {0xBD7,0xBD7,0x44}, {0xC00,0xC00,0xC4}, {0xC01,0xC03,0x8},
+    {0xC04,0xC04,0xC4}, {0xC15,0xC28,0x20}, {0xC2A,0xC39,0x20}, {0xC3C,0xC3C,0xC4},
+    {0xC3E,0xC40,0xC4}, {0xC41,0xC44,0x8}, {0xC46,0xC48,0xC4}, {0xC4A,0xC4C,0xC4},
+    {0xC4D,0xC4D,0xE4}, {0xC55,0xC56,0xC4}, {0xC58,0xC5A,0x20}, {0xC62,0xC63,0xC4},
+    {0xC81,0xC81,0xC4}, {0xC82,0xC83,0x8}, {0xCBC,0xCBC,0xC4}, {0xCBE,0xCBE,0x8},
+    {0xCBF,0xCBF,0xC4}, {0xCC0,0xCC0,0x44}, {0xCC1,0xCC1,0x8}, {0xCC2,0xCC2,0x44},
+    {0xCC3,0xCC4,0x8}, {0xCC6,0xCC6,0xC4}, {0xCC7,0xCC8,0x44}, {0xCCA,0xCCB,0x44},
+    {0xCCC,0xCCD,0xC4}, {0xCD5,0xCD6,0x44}, {0xCE2,0xCE3,0xC4}, {0xCF3,0xCF3,0x8},
+    {0xD00,0xD01,0xC4}, {0xD02,0xD03,0x8}, {0xD15,0xD3A,0x20}, {0xD3B,0xD3C,0xC4},
+    {0xD3E,0xD3E,0x44}, {0xD3F,0xD40,0x8}, {0xD41,0xD44,0xC4}, {0xD46,0xD48,0x8},
+    {0xD4A,0xD4C,0x8}, {0xD4D,0xD4D,0xE4}, {0xD4E,0xD4E,0x7}, {0xD57,0xD57,0x44},
+    {0xD62,0xD63,0xC4}, {0xD81,0xD81,0xC4}, {0xD82,0xD83,0x8}, {0xDCA,0xDCA,0xC4},
+    {0xDCF,0xDCF,0x44}, {0xDD0,0xDD1,0x8}, {0xDD2,0xDD4,0xC4}, {0xDD6,0xDD6,0xC4},
+    {0xDD8,0xDDE,0x8}, {0xDDF,0xDDF,0x44}, {0xDF2,0xDF3,0x8}, {0xE31,0xE31,0xC4},
+    {0xE33,0xE33,0x8}, {0xE34,0xE3A,0xC4}, {0xE47,0xE4E,0xC4}, {0xEB1,0xEB1,0xC4},
+    {0xEB3,0xEB3,0x8}, {0xEB4,0xEBC,0xC4}, {0xEC8,0xECE,0xC4}, {0xF18,0xF19,0xC4},
+    {0xF35,0xF35,0xC4}, {0xF37,0xF37,0xC4}, {0xF39,0xF39,0xC4}, {0xF3E,0xF3F,0x8},
+    {0xF71,0xF7E,0xC4}, {0xF7F,0xF7F,0x8}, {0xF80,0xF84,0xC4}, {0xF86,0xF87,0xC4},
+    {0xF8D,0xF97,0xC4}, {0xF99,0xFBC,0xC4}, {0xFC6,0xFC6,0xC4}, {0x1000,0x102A,0x20},
+    {0x102D,0x1030,0xC4}, {0x1031,0x1031,0x8}, {0x1032,0x1037,0xC4}, {0x1039,0x1039,0xE4},
+    {0x103A,0x103A,0xC4}, {0x103B,0x103C,0x8}, {0x103D,0x103E,0xC4}, {0x103F,0x103F,0x20},
+    {0x1050,0x1055,0x20}, {0x1056,0x1057,0x8}, {0x1058,0x1059,0xC4}, {0x105A,0x105D,0x20},
+    {0x105E,0x1060,0xC4}, {0x1061,0x1061,0x20}, {0x1065,0x1066,0x20}, {0x106E,0x1070,0x20},
+    {0x1071,0x1074,0xC4}, {0x1075,0x1081,0x20}, {0x1082,0x1082,0xC4}, {0x1084,0x1084,0x8},
+    {0x1085,0x1086,0xC4}, {0x108D,0x108D,0xC4}, {0x108E,0x108E,0x20}, {0x109D,0x109D,0xC4},
+    {0x1100,0x115E,0x109}, {0x115F,0x115F,0x89}, {0x1160,0x11A7,0x8A}, {0x11A8,0x11FF,0x8B},
+    {0x135D,0x135F,0xC4}, {0x1712,0x1714,0xC4}, {0x1715,0x1715,0x44}, {0x1732,0x1733,0xC4},
+    {0x1734,0x1734,0x44}, {0x1752,0x1753,0xC4}, {0x1772,0x1773,0xC4}, {0x1780,0x17B3,0x20},
+    {0x17B4,0x17B5,0xC4}, {0x17B6,0x17B6,0x8}, {0x17B7,0x17BD,0xC4}, {0x17BE,0x17C5,0x8},
+    {0x17C6,0x17C6,0xC4}, {0x17C7,0x17C8,0x8}, {0x17C9,0x17D1,0xC4}, {0x17D2,0x17D2,0xE4},
+    {0x17D3,0x17D3,0xC4}, {0x17DD,0x17DD,0xC4}, {0x180B,0x180D,0xC4}, {0x180E,0x180E,0x83},
+    {0x180F,0x180F,0xC4}, {0x1885,0x1886,0xC4}, {0x18A9,0x18A9,0xC4}, {0x1920,0x1922,0xC4},
+    {0x1923,0x1926,0x8}, {0x1927,0x1928,0xC4}, {0x1929,0x192B,0x8}, {0x1930,0x1931,0x8},
+    {0x1932,0x1932,0xC4}, {0x1933,0x1938,0x8}, {0x1939,0x193B,0xC4}, {0x1A17,0x1A18,0xC4},
+    {0x1A19,0x1A1A,0x8}, {0x1A1B,0x1A1B,0xC4}, {0x1A20,0x1A54,0x20}, {0x1A55,0x1A55,0x8},
+    {0x1A56,0x1A56,0xC4}, {0x1A57,0x1A57,0x8}, {0x1A58,0x1A5E,0xC4}, {0x1A60,0x1A60,0xE4},
+    {0x1A62,0x1A62,0xC4}, {0x1A65,0x1A6C,0xC4}, {0x1A6D,0x1A72,0x8}, {0x1A73,0x1A7C,0xC4},
+    {0x1A7F,0x1A7F,0xC4}, {0x1AB0,0x1ADD,0xC4}, {0x1AE0,0x1AEB,0xC4}, {0x1B00,0x1B03,0xC4},
+    {0x1B04,0x1B04,0x8}, {0x1B0B,0x1B0C,0x20}, {0x1B13,0x1B33,0x20}, {0x1B34,0x1B34,0xC4},
+    {0x1B35,0x1B35,0x44}, {0x1B36,0x1B3A,0xC4}, {0x1B3B,0x1B3B,0x44}, {0x1B3C,0x1B3C,0xC4},
+    {0x1B3D,0x1B3D,0x44}, {0x1B3E,0x1B41,0x8}, {0x1B42,0x1B42,0xC4}, {0x1B43,0x1B43,0x44},
+    {0x1B44,0x1B44,0x64}, {0x1B45,0x1B4C,0x20}, {0x1B6B,0x1B73,0xC4}, {0x1B80,0x1B81,0xC4},
+    {0x1B82,0x1B82,0x8}, {0x1B83,0x1BA0,0x20}, {0x1BA1,0x1BA1,0x8}, {0x1BA2,0x1BA5,0xC4},
+    {0x1BA6,0x1BA7,0x8}, {0x1BA8,0x1BA9,0xC4}, {0x1BAA,0x1BAA,0x44}, {0x1BAB,0x1BAB,0xE4},
+    {0x1BAC,0x1BAD,0xC4}, {0x1BAE,0x1BAF,0x20}, {0x1BBB,0x1BBD,0x20}, {0x1BE6,0x1BE6,0xC4},
+    {0x1BE7,0x1BE7,0x8}, {0x1BE8,0x1BE9,0xC4}, {0x1BEA,0x1BEC,0x8}, {0x1BED,0x1BED,0xC4},
+    {0x1BEE,0x1BEE,0x8}, {0x1BEF,0x1BF1,0xC4}, {0x1BF2,0x1BF3,0x44}, {0x1C24,0x1C2B,0x8},
+    {0x1C2C,0x1C33,0xC4}, {0x1C34,0x1C35,0x8}, {0x1C36,0x1C37,0xC4}, {0x1CD0,0x1CD2,0xC4},
+    {0x1CD4,0x1CE0,0xC4}, {0x1CE1,0x1CE1,0x8}, {0x1CE2,0x1CE8,0xC4}, {0x1CED,0x1CED,0xC4},
+    {0x1CF4,0x1CF4,0xC4}, {0x1CF7,0x1CF7,0x8}, {0x1CF8,0x1CF9,0xC4}, {0x1DC0,0x1DFF,0xC4},
+    {0x200B,0x200B,0x83}, {0x200C,0x200C,0x84}, {0x200D,0x200D,0xC5}, {0x200E,0x200F,0x83},
+    {0x2028,0x2029,0x3}, {0x202A,0x202E,0x83}, {0x203C,0x203C,0x10}, {0x2049,0x2049,0x10},
+    {0x2060,0x206F,0x83}, {0x20D0,0x20F0,0xC4}, {0x2122,0x2122,0x10}, {0x2139,0x2139,0x10},
+    {0x2194,0x2199,0x10}, {0x21A9,0x21AA,0x10}, {0x231A,0x231B,0x110}, {0x2328,0x2328,0x10},
+    {0x2329,0x232A,0x100}, {0x23CF,0x23CF,0x10}, {0x23E9,0x23EC,0x110}, {0x23ED,0x23EF,0x10},
+    {0x23F0,0x23F0,0x110}, {0x23F1,0x23F2,0x10}, {0x23F3,0x23F3,0x110}, {0x23F8,0x23FA,0x10},
+    {0x24C2,0x24C2,0x10}, {0x25AA,0x25AB,0x10}, {0x25B6,0x25B6,0x10}, {0x25C0,0x25C0,0x10},
+    {0x25FB,0x25FC,0x10}, {0x25FD,0x25FE,0x110}, {0x2600,0x2604,0x10}, {0x260E,0x260E,0x10},
+    {0x2611,0x2611,0x10}, {0x2614,0x2615,0x110}, {0x2618,0x2618,0x10}, {0x261D,0x261D,0x10},
+    {0x2620,0x2620,0x10}, {0x2622,0x2623,0x10}, {0x2626,0x2626,0x10}, {0x262A,0x262A,0x10},
+    {0x262E,0x262F,0x10}, {0x2630,0x2637,0x100}, {0x2638,0x263A,0x10}, {0x2640,0x2640,0x10},
+    {0x2642,0x2642,0x10}, {0x2648,0x2653,0x110}, {0x265F,0x2660,0x10}, {0x2663,0x2663,0x10},
+    {0x2665,0x2666,0x10}, {0x2668,0x2668,0x10}, {0x267B,0x267B,0x10}, {0x267E,0x267E,0x10},
+    {0x267F,0x267F,0x110}, {0x268A,0x268F,0x100}, {0x2692,0x2692,0x10}, {0x2693,0x2693,0x110},
+    {0x2694,0x2697,0x10}, {0x2699,0x2699,0x10}, {0x269B,0x269C,0x10}, {0x26A0,0x26A0,0x10},
+    {0x26A1,0x26A1,0x110}, {0x26A7,0x26A7,0x10}, {0x26AA,0x26AB,0x110}, {0x26B0,0x26B1,0x10},
+    {0x26BD,0x26BE,0x110}, {0x26C4,0x26C5,0x110}, {0x26C8,0x26C8,0x10}, {0x26CE,0x26CE,0x110},
+    {0x26CF,0x26CF,0x10}, {0x26D1,0x26D1,0x10}, {0x26D3,0x26D3,0x10}, {0x26D4,0x26D4,0x110},
+    {0x26E9,0x26E9,0x10}, {0x26EA,0x26EA,0x110}, {0x26F0,0x26F1,0x10}, {0x26F2,0x26F3,0x110},
+    {0x26F4,0x26F4,0x10}, {0x26F5,0x26F5,0x110}, {0x26F7,0x26F9,0x10}, {0x26FA,0x26FA,0x110},
+    {0x26FD,0x26FD,0x110}, {0x2702,0x2702,0x10}, {0x2705,0x2705,0x110}, {0x2708,0x2709,0x10},
+    {0x270A,0x270B,0x110}, {0x270C,0x270D,0x10}, {0x270F,0x270F,0x10}, {0x2712,0x2712,0x10},
+    {0x2714,0x2714,0x10}, {0x2716,0x2716,0x10}, {0x271D,0x271D,0x10}, {0x2721,0x2721,0x10},
+    {0x2728,0x2728,0x110}, {0x2733,0x2734,0x10}, {0x2744,0x2744,0x10}, {0x2747,0x2747,0x10},
+    {0x274C,0x274C,0x110}, {0x274E,0x274E,0x110}, {0x2753,0x2755,0x110}, {0x2757,0x2757,0x110},
+    {0x2763,0x2764,0x10}, {0x2795,0x2797,0x110}, {0x27A1,0x27A1,0x10}, {0x27B0,0x27B0,0x110},
+    {0x27BF,0x27BF,0x110}, {0x2934,0x2935,0x10}, {0x2B05,0x2B07,0x10}, {0x2B1B,0x2B1C,0x110},
+    {0x2B50,0x2B50,0x110}, {0x2B55,0x2B55,0x110}, {0x2CEF,0x2CF1,0xC4}, {0x2D7F,0x2D7F,0xC4},
+    {0x2DE0,0x2DFF,0xC4}, {0x2E80,0x2E99,0x100}, {0x2E9B,0x2EF3,0x100}, {0x2F00,0x2FD5,0x100},
+    {0x2FF0,0x3029,0x100}, {0x302A,0x302D,0xC4}, {0x302E,0x302F,0x144}, {0x3030,0x3030,0x110},
+    {0x3031,0x303C,0x100}, {0x303D,0x303D,0x110}, {0x303E,0x303E,0x100}, {0x3041,0x3096,0x100},
+    {0x3099,0x309A,0xC4}, {0x309B,0x30FF,0x100}, {0x3105,0x312F,0x100}, {0x3131,0x3163,0x100},
+    {0x3164,0x3164,0x80}, {0x3165,0x318E,0x100}, {0x3190,0x31E5,0x100}, {0x31EF,0x321E,0x100},
+    {0x3220,0x3247,0x100}, {0x3250,0x3296,0x100}, {0x3297,0x3297,0x110}, {0x3298,0x3298,0x100},
+    {0x3299,0x3299,0x110}, {0x329A,0xA48C,0x100}, {0xA490,0xA4C6,0x100}, {0xA66F,0xA672,0xC4},
+    {0xA674,0xA67D,0xC4}, {0xA69E,0xA69F,0xC4}, {0xA6F0,0xA6F1,0xC4}, {0xA802,0xA802,0xC4},
+    {0xA806,0xA806,0xC4}, {0xA80B,0xA80B,0xC4}, {0xA823,0xA824,0x8}, {0xA825,0xA826,0xC4},
+    {0xA827,0xA827,0x8}, {0xA82C,0xA82C,0xC4}, {0xA880,0xA881,0x8}, {0xA8B4,0xA8C3,0x8},
+    {0xA8C4,0xA8C5,0xC4}, {0xA8E0,0xA8F1,0xC4}, {0xA8FF,0xA8FF,0xC4}, {0xA926,0xA92D,0xC4},
+    {0xA947,0xA951,0xC4}, {0xA952,0xA952,0x8}, {0xA953,0xA953,0x44}, {0xA960,0xA97C,0x109},
+    {0xA980,0xA982,0xC4}, {0xA983,0xA983,0x8}, {0xA989,0xA98B,0x20}, {0xA98F,0xA9B2,0x20},
+    {0xA9B3,0xA9B3,0xC4}, {0xA9B4,0xA9B5,0x8}, {0xA9B6,0xA9B9,0xC4}, {0xA9BA,0xA9BB,0x8},
+    {0xA9BC,0xA9BD,0xC4}, {0xA9BE,0xA9BF,0x8}, {0xA9C0,0xA9C0,0x64}, {0xA9E0,0xA9E4,0x20},
+    {0xA9E5,0xA9E5,0xC4}, {0xA9E7,0xA9EF,0x20}, {0xA9FA,0xA9FE,0x20}, {0xAA29,0xAA2E,0xC4},
+    {0xAA2F,0xAA30,0x8}, {0xAA31,0xAA32,0xC4}, {0xAA33,0xAA34,0x8}, {0xAA35,0xAA36,0xC4},
+    {0xAA43,0xAA43,0xC4}, {0xAA4C,0xAA4C,0xC4}, {0xAA4D,0xAA4D,0x8}, {0xAA60,0xAA6F,0x20},
+    {0xAA71,0xAA73,0x20}, {0xAA7A,0xAA7A,0x20}, {0xAA7C,0xAA7C,0xC4}, {0xAA7E,0xAA7F,0x20},
+    {0xAAB0,0xAAB0,0xC4}, {0xAAB2,0xAAB4,0xC4}, {0xAAB7,0xAAB8,0xC4}, {0xAABE,0xAABF,0xC4},
+    {0xAAC1,0xAAC1,0xC4}, {0xAAE0,0xAAEA,0x20}, {0xAAEB,0xAAEB,0x8}, {0xAAEC,0xAAED,0xC4},
+    {0xAAEE,0xAAEF,0x8}, {0xAAF5,0xAAF5,0x8}, {0xAAF6,0xAAF6,0xE4}, {0xABC0,0xABDA,0x20},
+    {0xABE3,0xABE4,0x8}, {0xABE5,0xABE5,0xC4}, {0xABE6,0xABE7,0x8}, {0xABE8,0xABE8,0xC4},
+    {0xABE9,0xABEA,0x8}, {0xABEC,0xABEC,0x8}, {0xABED,0xABED,0xC4}, {0xD7B0,0xD7C6,0x8A},
+    {0xD7CB,0xD7FB,0x8B}, {0xF900,0xFAFF,0x100}, {0xFB1E,0xFB1E,0xC4}, {0xFE00,0xFE0F,0xC4},
+    {0xFE10,0xFE19,0x100}, {0xFE20,0xFE2F,0xC4}, {0xFE30,0xFE52,0x100}, {0xFE54,0xFE66,0x100},
+    {0xFE68,0xFE6B,0x100}, {0xFEFF,0xFEFF,0x83}, {0xFF01,0xFF60,0x100}, {0xFF9E,0xFF9F,0x44},
+    {0xFFA0,0xFFA0,0x80}, {0xFFE0,0xFFE6,0x100}, {0xFFF0,0xFFFB,0x83}, {0x101FD,0x101FD,0xC4},
+    {0x102E0,0x102E0,0xC4}, {0x10376,0x1037A,0xC4}, {0x10A00,0x10A00,0x20}, {0x10A01,0x10A03,0xC4},
+    {0x10A05,0x10A06,0xC4}, {0x10A0C,0x10A0F,0xC4}, {0x10A10,0x10A13,0x20}, {0x10A15,0x10A17,0x20},
+    {0x10A19,0x10A35,0x20}, {0x10A38,0x10A3A,0xC4}, {0x10A3F,0x10A3F,0xE4}, {0x10AE5,0x10AE6,0xC4},
+    {0x10D24,0x10D27,0xC4}, {0x10D69,0x10D6D,0xC4}, {0x10EAB,0x10EAC,0xC4}, {0x10EFA,0x10EFF,0xC4},
+    {0x10F46,0x10F50,0xC4}, {0x10F82,0x10F85,0xC4}, {0x11000,0x11000,0x8}, {0x11001,0x11001,0xC4},
+    {0x11002,0x11002,0x8}, {0x11038,0x11046,0xC4}, {0x11070,0x11070,0xC4}, {0x11073,0x11074,0xC4},
+    {0x1107F,0x11081,0xC4}, {0x11082,0x11082,0x8}, {0x110B0,0x110B2,0x8}, {0x110B3,0x110B6,0xC4},
+    {0x110B7,0x110B8,0x8}, {0x110B9,0x110BA,0xC4}, {0x110BD,0x110BD,0x87}, {0x110C2,0x110C2,0xC4},
+    {0x110CD,0x110CD,0x87}, {0x11100,0x11102,0xC4}, {0x11103,0x11126,0x20}, {0x11127,0x1112B,0xC4},
+    {0x1112C,0x1112C,0x8}, {0x1112D,0x11132,0xC4}, {0x11133,0x11133,0xE4}, {0x11134,0x11134,0xC4},
+    {0x11144,0x11144,0x20}, {0x11145,0x11146,0x8}, {0x11147,0x11147,0x20}, {0x11173,0x11173,0xC4},
+    {0x11180,0x11181,0xC4}, {0x11182,0x11182,0x8}, {0x111B3,0x111B5,0x8}, {0x111B6,0x111BE,0xC4},
+    {0x111BF,0x111BF,0x8}, {0x111C0,0x111C0,0x44}, {0x111C2,0x111C3,0x7}, {0x111C9,0x111CC,0xC4},
+    {0x111CE,0x111CE,0x8}, {0x111CF,0x111CF,0xC4}, {0x1122C,0x1122E,0x8}, {0x1122F,0x11231,0xC4},
+    {0x11232,0x11233,0x8}, {0x11234,0x11234,0xC4}, {0x11235,0x11235,0x44}, {0x11236,0x11237,0xC4},
+    {0x1123E,0x1123E,0xC4}, {0x11241,0x11241,0xC4}, {0x112DF,0x112DF,0xC4}, {0x112E0,0x112E2,0x8},
+    {0x112E3,0x112EA,0xC4}, {0x11300,0x11301,0xC4}, {0x11302,0x11303,0x8}, {0x1133B,0x1133C,0xC4},
+    {0x1133E,0x1133E,0x44}, {0x1133F,0x1133F,0x8}, {0x11340,0x11340,0xC4}, {0x11341,0x11344,0x8},
+    {0x11347,0x11348,0x8}, {0x1134B,0x1134C,0x8}, {0x1134D,0x1134D,0x44}, {0x11357,0x11357,0x44},
+    {0x11362,0x11363,0x8}, {0x11366,0x1136C,0xC4}, {0x11370,0x11374,0xC4}, {0x11380,0x11389,0x20},
+    {0x1138B,0x1138B,0x20}, {0x1138E,0x1138E,0x20}, {0x11390,0x113B5,0x20}, {0x113B8,0x113B8,0x44},
+    {0x113B9,0x113BA,0x8}, {0x113BB,0x113C0,0xC4}, {0x113C2,0x113C2,0x44}, {0x113C5,0x113C5,0x44},
+    {0x113C7,0x113C9,0x44}, {0x113CA,0x113CA,0x8}, {0x113CC,0x113CD,0x8}, {0x113CE,0x113CE,0xC4},
+    {0x113CF,0x113CF,0x44}, {0x113D0,0x113D0,0xE4}, {0x113D1,0x113D1,0x7}, {0x113D2,0x113D2,0xC4},
+    {0x113E1,0x113E2,0xC4}, {0x11435,0x11437,0x8}, {0x11438,0x1143F,0xC4}, {0x11440,0x11441,0x8},
+    {0x11442,0x11444,0xC4}, {0x11445,0x11445,0x8}, {0x11446,0x11446,0xC4}, {0x1145E,0x1145E,0xC4},
+    {0x114B0,0x114B0,0x44}, {0x114B1,0x114B2,0x8}, {0x114B3,0x114B8,0xC4}, {0x114B9,0x114B9,0x8},
+    {0x114BA,0x114BA,0xC4}, {0x114BB,0x114BC,0x8}, {0x114BD,0x114BD,0x44}, {0x114BE,0x114BE,0x8},
+    {0x114BF,0x114C0,0xC4}, {0x114C1,0x114C1,0x8}, {0x114C2,0x114C3,0xC4}, {0x115AF,0x115AF,0x44},
+    {0x115B0,0x115B1,0x8}, {0x115B2,0x115B5,0xC4}, {0x115B8,0x115BB,0x8}, {0x115BC,0x115BD,0xC4},
+    {0x115BE,0x115BE,0x8}, {0x115BF,0x115C0,0xC4}, {0x115DC,0x115DD,0xC4}, {0x11630,0x11632,0x8},
+    {0x11633,0x1163A,0xC4}, {0x1163B,0x1163C,0x8}, {0x1163D,0x1163D,0xC4}, {0x1163E,0x1163E,0x8},
+    {0x1163F,0x11640,0xC4}, {0x116AB,0x116AB,0xC4}, {0x116AC,0x116AC,0x8}, {0x116AD,0x116AD,0xC4},
+    {0x116AE,0x116AF,0x8}, {0x116B0,0x116B5,0xC4}, {0x116B6,0x116B6,0x44}, {0x116B7,0x116B7,0xC4},
+    {0x1171D,0x1171D,0xC4}, {0x1171E,0x1171E,0x8}, {0x1171F,0x1171F,0xC4}, {0x11722,0x11725,0xC4},
+    {0x11726,0x11726,0x8}, {0x11727,0x1172B,0xC4}, {0x1182C,0x1182E,0x8}, {0x1182F,0x11837,0xC4},
+    {0x11838,0x11838,0x8}, {0x11839,0x1183A,0xC4}, {0x11900,0x11906,0x20}, {0x11909,0x11909,0x20},
+    {0x1190C,0x11913,0x20}, {0x11915,0x11916,0x20}, {0x11918,0x1192F,0x20}, {0x11930,0x11930,0x44},
+    {0x11931,0x11935,0x8}, {0x11937,0x11938,0x8}, {0x1193B,0x1193C,0xC4}, {0x1193D,0x1193D,0x44},
+    {0x1193E,0x1193E,0xE4}, {0x1193F,0x1193F,0x7}, {0x11940,0x11940,0x8}, {0x11941,0x11941,0x7},
+    {0x11942,0x11942,0x8}, {0x11943,0x11943,0xC4}, {0x119D1,0x119D3,0x8}, {0x119D4,0x119D7,0xC4},
+    {0x119DA,0x119DB,0xC4}, {0x119DC,0x119DF,0x8}, {0x119E0,0x119E0,0xC4}, {0x119E4,0x119E4,0x8},
+    {0x11A00,0x11A00,0x20}, {0x11A01,0x11A0A,0xC4}, {0x11A0B,0x11A32,0x20}, {0x11A33,0x11A38,0xC4},
+    {0x11A39,0x11A39,0x8}, {0x11A3B,0x11A3E,0xC4}, {0x11A47,0x11A47,0xE4}, {0x11A50,0x11A50,0x20},
+    {0x11A51,0x11A56,0xC4}, {0x11A57,0x11A58,0x8}, {0x11A59,0x11A5B,0xC4}, {0x11A5C,0x11A83,0x20},
+    {0x11A84,0x11A89,0x7}, {0x11A8A,0x11A96,0xC4}, {0x11A97,0x11A97,0x8}, {0x11A98,0x11A98,0xC4},
+    {0x11A99,0x11A99,0xE4}, {0x11B60,0x11B60,0xC4}, {0x11B61,0x11B61,0x8}, {0x11B62,0x11B64,0xC4},
+    {0x11B65,0x11B65,0x8}, {0x11B66,0x11B66,0xC4}, {0x11B67,0x11B67,0x8}, {0x11C2F,0x11C2F,0x8},
+    {0x11C30,0x11C36,0xC4}, {0x11C38,0x11C3D,0xC4}, {0x11C3E,0x11C3E,0x8}, {0x11C3F,0x11C3F,0xC4},
+    {0x11C92,0x11CA7,0xC4}, {0x11CA9,0x11CA9,0x8}, {0x11CAA,0x11CB0,0xC4}, {0x11CB1,0x11CB1,0x8},
+    {0x11CB2,0x11CB3,0xC4}, {0x11CB4,0x11CB4,0x8}, {0x11CB5,0x11CB6,0xC4}, {0x11D31,0x11D36,0xC4},
+    {0x11D3A,0x11D3A,0xC4}, {0x11D3C,0x11D3D,0xC4}, {0x11D3F,0x11D45,0xC4}, {0x11D46,0x11D46,0x7},
+    {0x11D47,0x11D47,0xC4}, {0x11D8A,0x11D8E,0x8}, {0x11D90,0x11D91,0xC4}, {0x11D93,0x11D94,0x8},
+    {0x11D95,0x11D95,0xC4}, {0x11D96,0x11D96,0x8}, {0x11D97,0x11D97,0xC4}, {0x11EF3,0x11EF4,0xC4},
+    {0x11EF5,0x11EF6,0x8}, {0x11F00,0x11F01,0xC4}, {0x11F02,0x11F02,0x7}, {0x11F03,0x11F03,0x8},
+    {0x11F04,0x11F10,0x20}, {0x11F12,0x11F33,0x20}, {0x11F34,0x11F35,0x8}, {0x11F36,0x11F3A,0xC4},
+    {0x11F3E,0x11F3F,0x8}, {0x11F40,0x11F40,0xC4}, {0x11F41,0x11F41,0x44}, {0x11F42,0x11F42,0xE4},
+    {0x11F5A,0x11F5A,0xC4}, {0x13430,0x1343F,0x83}, {0x13440,0x13440,0xC4}, {0x13447,0x13455,0xC4},
+    {0x1611E,0x16129,0xC4}, {0x1612A,0x1612C,0x8}, {0x1612D,0x1612F,0xC4}, {0x16AF0,0x16AF4,0xC4},
+    {0x16B30,0x16B36,0xC4}, {0x16D63,0x16D63,0x8A}, {0x16D67,0x16D6A,0x8A}, {0x16F4F,0x16F4F,0xC4},
+    {0x16F51,0x16F87,0x8}, {0x16F8F,0x16F92,0xC4}, {0x16FE0,0x16FE3,0x100}, {0x16FE4,0x16FE4,0xC4},
+    {0x16FF0,0x16FF1,0x144}, {0x16FF2,0x16FF6,0x100}, {0x17000,0x18CD5,0x100}, {0x18CFF,0x18D1E,0x100},
+    {0x18D80,0x18DF2,0x100}, {0x1AFF0,0x1AFF3,0x100}, {0x1AFF5,0x1AFFB,0x100}, {0x1AFFD,0x1AFFE,0x100},
+    {0x1B000,0x1B122,0x100}, {0x1B132,0x1B132,0x100}, {0x1B150,0x1B152,0x100}, {0x1B155,0x1B155,0x100},
+    {0x1B164,0x1B167,0x100}, {0x1B170,0x1B2FB,0x100}, {0x1BC9D,0x1BC9E,0xC4}, {0x1BCA0,0x1BCA3,0x83},
+    {0x1CF00,0x1CF2D,0xC4}, {0x1CF30,0x1CF46,0xC4}, {0x1D165,0x1D166,0x44}, {0x1D167,0x1D169,0xC4},
+    {0x1D16D,0x1D172,0x44}, {0x1D173,0x1D17A,0x83}, {0x1D17B,0x1D182,0xC4}, {0x1D185,0x1D18B,0xC4},
+    {0x1D1AA,0x1D1AD,0xC4}, {0x1D242,0x1D244,0xC4}, {0x1D300,0x1D356,0x100}, {0x1D360,0x1D376,0x100},
+    {0x1DA00,0x1DA36,0xC4}, {0x1DA3B,0x1DA6C,0xC4}, {0x1DA75,0x1DA75,0xC4}, {0x1DA84,0x1DA84,0xC4},
+    {0x1DA9B,0x1DA9F,0xC4}, {0x1DAA1,0x1DAAF,0xC4}, {0x1E000,0x1E006,0xC4}, {0x1E008,0x1E018,0xC4},
+    {0x1E01B,0x1E021,0xC4}, {0x1E023,0x1E024,0xC4}, {0x1E026,0x1E02A,0xC4}, {0x1E08F,0x1E08F,0xC4},
+    {0x1E130,0x1E136,0xC4}, {0x1E2AE,0x1E2AE,0xC4}, {0x1E2EC,0x1E2EF,0xC4}, {0x1E4EC,0x1E4EF,0xC4},
+    {0x1E5EE,0x1E5EF,0xC4}, {0x1E6E3,0x1E6E3,0xC4}, {0x1E6E6,0x1E6E6,0xC4}, {0x1E6EE,0x1E6EF,0xC4},
+    {0x1E6F5,0x1E6F5,0xC4}, {0x1E8D0,0x1E8D6,0xC4}, {0x1E944,0x1E94A,0xC4}, {0x1F004,0x1F004,0x110},
+    {0x1F02C,0x1F02F,0x10}, {0x1F094,0x1F09F,0x10}, {0x1F0AF,0x1F0B0,0x10}, {0x1F0C0,0x1F0C0,0x10},
+    {0x1F0CF,0x1F0CF,0x110}, {0x1F0D0,0x1F0D0,0x10}, {0x1F0F6,0x1F0FF,0x10}, {0x1F170,0x1F171,0x10},
+    {0x1F17E,0x1F17F,0x10}, {0x1F18E,0x1F18E,0x110}, {0x1F191,0x1F19A,0x110}, {0x1F1AE,0x1F1E5,0x10},
+    {0x1F1E6,0x1F1FF,0x6}, {0x1F200,0x1F200,0x100}, {0x1F201,0x1F202,0x110}, {0x1F203,0x1F20F,0x10},
+    {0x1F210,0x1F219,0x100}, {0x1F21A,0x1F21A,0x110}, {0x1F21B,0x1F22E,0x100}, {0x1F22F,0x1F22F,0x110},
+    {0x1F230,0x1F231,0x100}, {0x1F232,0x1F23A,0x110}, {0x1F23B,0x1F23B,0x100}, {0x1F23C,0x1F23F,0x10},
+    {0x1F240,0x1F248,0x100}, {0x1F249,0x1F24F,0x10}, {0x1F250,0x1F251,0x110}, {0x1F252,0x1F25F,0x10},
+    {0x1F260,0x1F265,0x100}, {0x1F266,0x1F2FF,0x10}, {0x1F300,0x1F320,0x110}, {0x1F321,0x1F321,0x10},
+    {0x1F324,0x1F32C,0x10}, {0x1F32D,0x1F335,0x110}, {0x1F336,0x1F336,0x10}, {0x1F337,0x1F37C,0x110},
+    {0x1F37D,0x1F37D,0x10}, {0x1F37E,0x1F393,0x110}, {0x1F396,0x1F397,0x10}, {0x1F399,0x1F39B,0x10},
+    {0x1F39E,0x1F39F,0x10}, {0x1F3A0,0x1F3CA,0x110}, {0x1F3CB,0x1F3CE,0x10}, {0x1F3CF,0x1F3D3,0x110},
+    {0x1F3D4,0x1F3DF,0x10}, {0x1F3E0,0x1F3F0,0x110}, {0x1F3F3,0x1F3F3,0x10}, {0x1F3F4,0x1F3F4,0x110},
+    {0x1F3F5,0x1F3F5,0x10}, {0x1F3F7,0x1F3F7,0x10}, {0x1F3F8,0x1F3FA,0x110}, {0x1F3FB,0x1F3FF,0x144},
+    {0x1F400,0x1F43E,0x110}, {0x1F43F,0x1F43F,0x10}, {0x1F440,0x1F440,0x110}, {0x1F441,0x1F441,0x10},
+    {0x1F442,0x1F4FC,0x110}, {0x1F4FD,0x1F4FD,0x10}, {0x1F4FF,0x1F53D,0x110}, {0x1F549,0x1F54A,0x10},
+    {0x1F54B,0x1F54E,0x110}, {0x1F550,0x1F567,0x110}, {0x1F56F,0x1F570,0x10}, {0x1F573,0x1F579,0x10},
+    {0x1F57A,0x1F57A,0x110}, {0x1F587,0x1F587,0x10}, {0x1F58A,0x1F58D,0x10}, {0x1F590,0x1F590,0x10},
+    {0x1F595,0x1F596,0x110}, {0x1F5A4,0x1F5A4,0x110}, {0x1F5A5,0x1F5A5,0x10}, {0x1F5A8,0x1F5A8,0x10},
+    {0x1F5B1,0x1F5B2,0x10}, {0x1F5BC,0x1F5BC,0x10}, {0x1F5C2,0x1F5C4,0x10}, {0x1F5D1,0x1F5D3,0x10},
+    {0x1F5DC,0x1F5DE,0x10}, {0x1F5E1,0x1F5E1,0x10}, {0x1F5E3,0x1F5E3,0x10}, {0x1F5E8,0x1F5E8,0x10},
+    {0x1F5EF,0x1F5EF,0x10}, {0x1F5F3,0x1F5F3,0x10}, {0x1F5FA,0x1F5FA,0x10}, {0x1F5FB,0x1F64F,0x110},
+    {0x1F680,0x1F6C5,0x110}, {0x1F6CB,0x1F6CB,0x10}, {0x1F6CC,0x1F6CC,0x110}, {0x1F6CD,0x1F6CF,0x10},
+    {0x1F6D0,0x1F6D2,0x110}, {0x1F6D5,0x1F6D8,0x110}, {0x1F6D9,0x1F6DB,0x10}, {0x1F6DC,0x1F6DF,0x110},
+    {0x1F6E0,0x1F6E5,0x10}, {0x1F6E9,0x1F6E9,0x10}, {0x1F6EB,0x1F6EC,0x110}, {0x1F6ED,0x1F6F0,0x10},
+    {0x1F6F3,0x1F6F3,0x10}, {0x1F6F4,0x1F6FC,0x110}, {0x1F6FD,0x1F6FF,0x10}, {0x1F7DA,0x1F7DF,0x10},
+    {0x1F7E0,0x1F7EB,0x110}, {0x1F7EC,0x1F7EF,0x10}, {0x1F7F0,0x1F7F0,0x110}, {0x1F7F1,0x1F7FF,0x10},
+    {0x1F80C,0x1F80F,0x10}, {0x1F848,0x1F84F,0x10}, {0x1F85A,0x1F85F,0x10}, {0x1F888,0x1F88F,0x10},
+    {0x1F8AE,0x1F8AF,0x10}, {0x1F8BC,0x1F8BF,0x10}, {0x1F8C2,0x1F8CF,0x10}, {0x1F8D9,0x1F8FF,0x10},
+    {0x1F90C,0x1F93A,0x110}, {0x1F93C,0x1F945,0x110}, {0x1F947,0x1F9FF,0x110}, {0x1FA58,0x1FA5F,0x10},
+    {0x1FA6E,0x1FA6F,0x10}, {0x1FA70,0x1FA7C,0x110}, {0x1FA7D,0x1FA7F,0x10}, {0x1FA80,0x1FA8A,0x110},
+    {0x1FA8B,0x1FA8D,0x10}, {0x1FA8E,0x1FAC6,0x110}, {0x1FAC7,0x1FAC7,0x10}, {0x1FAC8,0x1FAC8,0x110},
+    {0x1FAC9,0x1FACC,0x10}, {0x1FACD,0x1FADC,0x110}, {0x1FADD,0x1FADE,0x10}, {0x1FADF,0x1FAEA,0x110},
+    {0x1FAEB,0x1FAEE,0x10}, {0x1FAEF,0x1FAF8,0x110}, {0x1FAF9,0x1FAFF,0x10}, {0x1FC00,0x1FFFD,0x10},
+    {0x20000,0x2FFFD,0x100}, {0x30000,0x3FFFD,0x100}, {0xE0000,0xE001F,0x83}, {0xE0020,0xE007F,0xC4},
+    {0xE0080,0xE00FF,0x83}, {0xE0100,0xE01EF,0xC4}, {0xE01F0,0xE0FFF,0x83},
+};
+inline constexpr size_t char_props_size = 987;
+// }}} unicode-tables
+
+/* Look up the merged properties of a codepoint. Hangul syllables are
+ * handled algorithmically to keep the table small. */
+inline uint16_t char_props_of(uint32_t cp) {
+    if (cp >= 0xAC00 && cp <= 0xD7A3) {
+        /* Hangul syllable: LV when the syllable index is a multiple of 28
+         * (no trailing consonant), LVT otherwise. Always 2 columns wide. */
+        auto gcb = ((cp - 0xAC00) % 28 == 0) ? GCB::LV : GCB::LVT;
+        return static_cast<uint16_t>(static_cast<uint16_t>(gcb) |
+                                     (static_cast<uint16_t>(WidthClass::Wide) << 7));
+    }
+    size_t lo = 0, hi = char_props_size;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (char_props[mid].hi < cp) {
+            lo = mid + 1;
+        } else if (char_props[mid].lo > cp) {
+            hi = mid;
+        } else {
+            return char_props[mid].val;
+        }
+    }
+    return 0;
+}
+
+inline GCB gcb_of(uint16_t props) { return static_cast<GCB>(props & 0xF); }
+inline bool is_ext_pict(uint16_t props) { return (props & ExtPictFlag) != 0; }
+inline InCB incb_of(uint16_t props) { return static_cast<InCB>((props >> 5) & 0x3); }
+inline WidthClass width_class_of(uint16_t props) {
+    return static_cast<WidthClass>((props >> 7) & 0x3);
+}
+
+/* Decode the UTF-8 sequence starting at s (avail bytes available) into a
+ * codepoint, storing the consumed byte length in *len. Invalid or truncated
+ * sequences are consumed one byte at a time and returned verbatim, so the
+ * editing code never gets stuck. */
+inline uint32_t decode_utf8(const char *s, size_t avail, size_t *len) {
+    const auto *p = reinterpret_cast<const unsigned char *>(s);
+    *len = 1;
+    if (avail == 0) return 0;
+    if ((p[0] & 0x80) == 0) return p[0];
+    if ((p[0] & 0xE0) == 0xC0 && avail >= 2 && (p[1] & 0xC0) == 0x80) {
+        *len = 2;
+        return ((p[0] & 0x1Fu) << 6) | (p[1] & 0x3Fu);
+    }
+    if ((p[0] & 0xF0) == 0xE0 && avail >= 3 && (p[1] & 0xC0) == 0x80 &&
+        (p[2] & 0xC0) == 0x80) {
+        *len = 3;
+        return ((p[0] & 0x0Fu) << 12) | ((p[1] & 0x3Fu) << 6) | (p[2] & 0x3Fu);
+    }
+    if ((p[0] & 0xF8) == 0xF0 && avail >= 4 && (p[1] & 0xC0) == 0x80 &&
+        (p[2] & 0xC0) == 0x80 && (p[3] & 0xC0) == 0x80) {
+        *len = 4;
+        return ((p[0] & 0x07u) << 18) | ((p[1] & 0x3Fu) << 12) |
+               ((p[2] & 0x3Fu) << 6) | (p[3] & 0x3Fu);
+    }
+    return p[0];
+}
+
+/* Return the byte length of the codepoint ending at position 'pos'
+ * (exclusive) in buf. */
+inline size_t prev_cp_len(const char *buf, size_t pos) {
+    if (pos == 0) return 0;
+    size_t i = pos;
+    do {
+        i--;
+    } while (i > 0 && (pos - i) < 4 &&
+             (static_cast<unsigned char>(buf[i]) & 0xC0) == 0x80);
+    return pos - i;
+}
+
+/* Encode a codepoint as UTF-8 and append it to out. */
+inline void encode_utf8(std::string &out, uint32_t cp) {
+    if (cp < 0x80) {
+        out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (cp >> 18));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+/* Incremental UAX #29 grapheme cluster boundary detector. Feed codepoints
+ * left to right; is_boundary_before() reports whether a cluster boundary
+ * precedes the codepoint about to be fed. */
+struct GraphemeBreaker {
+    bool at_start = true;
+    GCB prev = GCB::Other;
+    int ri_run = 0;            /* Consecutive Regional Indicators seen. */
+    bool emoji_zwj = false;    /* \p{ExtPict} Extend* ZWJ just seen (GB11). */
+    bool emoji_seq = false;    /* In \p{ExtPict} Extend* prefix of GB11. */
+    bool incb_active = false;  /* InCB Consonant [Extend Linker]* seen (GB9c). */
+    bool incb_linker = false;  /* ... with at least one Linker. */
+
+    bool is_boundary_before(uint32_t cp) const {
+        uint16_t p = char_props_of(cp);
+        GCB next = gcb_of(p);
+        if (at_start) return true;                          /* GB1 */
+        if (prev == GCB::CR && next == GCB::LF) return false; /* GB3 */
+        if (prev == GCB::Control || prev == GCB::CR || prev == GCB::LF)
+            return true;                                    /* GB4 */
+        if (next == GCB::Control || next == GCB::CR || next == GCB::LF)
+            return true;                                    /* GB5 */
+        if (prev == GCB::L &&
+            (next == GCB::L || next == GCB::V || next == GCB::LV ||
+             next == GCB::LVT))
+            return false;                                   /* GB6 */
+        if ((prev == GCB::LV || prev == GCB::V) &&
+            (next == GCB::V || next == GCB::T))
+            return false;                                   /* GB7 */
+        if ((prev == GCB::LVT || prev == GCB::T) && next == GCB::T)
+            return false;                                   /* GB8 */
+        if (next == GCB::Extend || next == GCB::ZWJ) return false; /* GB9 */
+        if (next == GCB::SpacingMark) return false;         /* GB9a */
+        if (prev == GCB::Prepend) return false;             /* GB9b */
+        if (incb_active && incb_linker && incb_of(p) == InCB::Consonant)
+            return false;                                   /* GB9c */
+        if (emoji_zwj && is_ext_pict(p)) return false;      /* GB11 */
+        if (prev == GCB::RegionalIndicator &&
+            next == GCB::RegionalIndicator && (ri_run % 2) == 1)
+            return false;                                   /* GB12/GB13 */
+        return true;                                        /* GB999 */
+    }
+
+    void feed(uint32_t cp) {
+        uint16_t p = char_props_of(cp);
+        GCB g = gcb_of(p);
+
+        ri_run = (g == GCB::RegionalIndicator) ? ri_run + 1 : 0;
+
+        /* GB11 state machine: ExtPict Extend* ZWJ × ExtPict. */
+        if (is_ext_pict(p)) {
+            emoji_seq = true;
+            emoji_zwj = false;
+        } else if (emoji_seq && g == GCB::Extend) {
+            emoji_zwj = false;
+        } else if (emoji_seq && g == GCB::ZWJ) {
+            emoji_zwj = true;
+            emoji_seq = false;
+        } else {
+            emoji_seq = false;
+            emoji_zwj = false;
+        }
+
+        /* GB9c state machine: InCB=Consonant [InCB=Extend InCB=Linker]*
+         * InCB=Linker [InCB=Extend InCB=Linker]* × InCB=Consonant. */
+        InCB ic = incb_of(p);
+        if (ic == InCB::Consonant) {
+            incb_active = true;
+            incb_linker = false;
+        } else if (incb_active && (ic == InCB::Extend || ic == InCB::Linker)) {
+            if (ic == InCB::Linker) incb_linker = true;
+        } else {
+            incb_active = false;
+            incb_linker = false;
+        }
+
+        prev = g;
+        at_start = false;
+    }
+};
+
+/* Return the byte length of the extended grapheme cluster starting at
+ * position 'pos' in s (which holds 'len' bytes). */
+inline size_t next_grapheme_len(const char *s, size_t pos, size_t len) {
+    if (pos >= len) return 0;
+    GraphemeBreaker gb;
+    size_t i = pos;
+    while (i < len) {
+        size_t cplen;
+        uint32_t cp = decode_utf8(s + i, len - i, &cplen);
+        if (i > pos && gb.is_boundary_before(cp)) break;
+        gb.feed(cp);
+        i += cplen;
+    }
+    return i - pos;
+}
+
+/* Return the byte length of the extended grapheme cluster ending at
+ * position 'pos' (exclusive). 'buf' points at the start of the whole
+ * string, so the function can look as far back as needed. The position is
+ * expected to be a cluster boundary (callers only move by clusters).
+ *
+ * The function scans back a bounded window of codepoints (extending
+ * through Regional Indicator runs so flag parity stays exact), then
+ * segments forward. Pathological clusters longer than the window are
+ * approximated. */
+inline size_t prev_grapheme_len(const char *buf, size_t pos) {
+    if (pos == 0) return 0;
+    const int max_back = 64;
+    size_t start = pos;
+    int back = 0;
+    while (start > 0 && back < max_back) {
+        size_t l = prev_cp_len(buf, start);
+        if (l == 0) break;
+        size_t cplen;
+        uint32_t cp = decode_utf8(buf + (start - l), l, &cplen);
+        uint16_t p = char_props_of(cp);
+        GCB g = gcb_of(p);
+        start -= l;
+        back++;
+        /* A control/CR/LF always starts its own cluster (except LF after
+         * CR), and an ASCII character can only be glued to what precedes
+         * it by a Prepend (which is never ASCII): both make safe re-sync
+         * anchors. */
+        if (g == GCB::Control || g == GCB::CR) break;
+        if (g == GCB::LF) {
+            size_t pl = prev_cp_len(buf, start);
+            if (pl > 0 && buf[start - pl] == '\r') start -= pl; /* CRLF */
+            break;
+        }
+        if (cp < 0x80) {
+            size_t pl = prev_cp_len(buf, start);
+            if (pl == 0) break;
+            size_t dummy;
+            uint32_t pcp = decode_utf8(buf + (start - pl), pl, &dummy);
+            if (gcb_of(char_props_of(pcp)) != GCB::Prepend) break;
+        }
+    }
+    /* Make sure we did not stop inside a Regional Indicator run: parity
+     * matters for GB12/GB13. */
+    while (start > 0) {
+        size_t dummy;
+        uint32_t cp = decode_utf8(buf + start, 4, &dummy);
+        if (gcb_of(char_props_of(cp)) != GCB::RegionalIndicator) break;
+        size_t l = prev_cp_len(buf, start);
+        if (l == 0) break;
+        uint32_t pcp = decode_utf8(buf + (start - l), l, &dummy);
+        if (gcb_of(char_props_of(pcp)) != GCB::RegionalIndicator) break;
+        start -= l;
+    }
+    /* Forward-segment the window; the last boundary before pos starts the
+     * cluster we are looking for. */
+    size_t prev = start, i = start;
+    while (i < pos) {
+        size_t g = next_grapheme_len(buf, i, pos);
+        if (g == 0) break;
+        prev = i;
+        i += g;
+    }
+    return pos - prev;
+}
+
+/* Display width of a single codepoint, terminal-style. */
+inline int cp_width(uint32_t cp) {
+    if (cp == 0) return 0;
+    if (cp < 0x20 || (cp >= 0x7F && cp < 0xA0)) return 0; /* control chars */
+    switch (width_class_of(char_props_of(cp))) {
+    case WidthClass::Zero: return 0;
+    case WidthClass::Wide: return 2;
+    default: return 1;
+    }
+}
+
+/* Display width of one extended grapheme cluster (len bytes at s).
+ * Extending characters and ZWJ-joined continuations contribute no width;
+ * an emoji variation selector (U+FE0F) forces emoji presentation (2
+ * columns); a Regional Indicator pair (flag) is 2 columns. */
+inline int grapheme_width(const char *s, size_t len) {
+    int width = 0;
+    int ri_count = 0;
+    bool has_vs16 = false;
+    bool after_zwj = false;
+    size_t i = 0;
+    while (i < len) {
+        size_t cplen;
+        uint32_t cp = decode_utf8(s + i, len - i, &cplen);
+        uint16_t p = char_props_of(cp);
+        GCB g = gcb_of(p);
+        if (cp == 0xFE0F) has_vs16 = true;
+        if (g == GCB::RegionalIndicator) ri_count++;
+        if (!after_zwj && g != GCB::Extend && g != GCB::ZWJ)
+            width += cp_width(cp);
+        after_zwj = (g == GCB::ZWJ);
+        i += cplen;
+    }
+    if (ri_count >= 2) return 2; /* flag emoji */
+    if (has_vs16 && width < 2) return 2;
+    return width;
+}
+
+/* If s[] points at an ANSI CSI escape sequence (e.g. a color change like
+ * ESC [ 1 ; 32 m), return its length in bytes. Otherwise return 0.
+ * The sequence layout follows ECMA-48: ESC '[', parameter bytes
+ * (0x30-0x3f), intermediate bytes (0x20-0x2f), and a final byte
+ * (0x40-0x7e). */
+inline size_t ansi_escape_len(const char *s, size_t len) {
+    if (len < 2 || s[0] != '\x1b' || s[1] != '[') return 0;
+    size_t i = 2;
+    while (i < len && static_cast<unsigned char>(s[i]) >= 0x30 &&
+           static_cast<unsigned char>(s[i]) <= 0x3f)
+        i++;
+    while (i < len && static_cast<unsigned char>(s[i]) >= 0x20 &&
+           static_cast<unsigned char>(s[i]) <= 0x2f)
+        i++;
+    if (i >= len || static_cast<unsigned char>(s[i]) < 0x40 ||
+        static_cast<unsigned char>(s[i]) > 0x7e)
+        return 0;
+    return i + 1;
+}
+
+/* Display width of a UTF-8 string of 'len' bytes, summing grapheme cluster
+ * widths. ANSI CSI escape sequences (e.g. colors in the prompt) count as
+ * zero width. */
+inline size_t str_width(const char *s, size_t len) {
+    size_t width = 0, i = 0;
+    while (i < len) {
+        if (s[i] == '\x1b') {
+            size_t skip = ansi_escape_len(s + i, len - i);
+            if (skip > 0) {
+                i += skip;
+                continue;
+            }
+        }
+        size_t g = next_grapheme_len(s, i, len);
+        if (g == 0) break;
+        width += grapheme_width(s + i, g);
+        i += g;
+    }
+    return width;
+}
+
+/* Display width of the single grapheme cluster at s. */
+inline int single_grapheme_width(const char *s, size_t len) {
+    return len ? grapheme_width(s, len) : 0;
+}
+
+} // namespace unicode
+
+/* ====================== Editing engine (detail) =========================== *
+ * A faithful C++ port of the antirez/linenoise editing engine: raw mode,
+ * single/multi line refresh, history, completion, hints, mask mode and
+ * bracketed paste folding. Differences from upstream are noted inline.
+ */
+namespace detail {
+
+inline constexpr size_t kHistoryDefaultMaxLen = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
+inline constexpr size_t kMaxLine = LINENOISE_MAX_LINE;
+inline constexpr size_t kPasteFoldThreshold = LINENOISE_PASTE_FOLD_THRESHOLD;
+inline constexpr size_t kPasteFoldContext = 8; /* Context chars kept around folds. */
+inline constexpr size_t kPasteMaxBytes = LINENOISE_MAX_LINE;
+inline constexpr int kMaxFolds = 16;
+
+using CompletionCallbackFn =
+    std::function<void(const char *, std::vector<std::string> &)>;
+using HintsCallbackFn = std::function<std::string(const char *, int &, bool &)>;
+
+/* Mutable library state (C++17 inline variables: one instance program-wide,
+ * unlike the per-translation-unit statics of older cpp-linenoise). */
+inline CompletionCallbackFn completion_callback;
+inline HintsCallbackFn hints_callback;
+inline bool mask_mode = false;
+inline bool ml_mode = false;
+inline bool raw_mode = false;
+inline int raw_mode_ifd = STDIN_FILENO;
+inline int raw_mode_ofd = STDOUT_FILENO;
+inline bool atexit_registered = false;
+inline size_t history_max_len = kHistoryDefaultMaxLen;
+inline std::vector<std::string> history;
+
+enum KEY_ACTION {
+    KEY_NULL = 0,
+    CTRL_A = 1,
+    CTRL_B = 2,
+    CTRL_C = 3,
+    CTRL_D = 4,
+    CTRL_E = 5,
+    CTRL_F = 6,
+    CTRL_H = 8,
+    TAB = 9,
+    CTRL_K = 11,
+    CTRL_L = 12,
+    ENTER = 13,
+    CTRL_N = 14,
+    CTRL_P = 16,
+    CTRL_T = 20,
+    CTRL_U = 21,
+    CTRL_W = 23,
+    ESC = 27,
+    BACKSPACE = 127
+};
+
+/* The State structure represents the state during line editing. */
+struct State {
+    bool in_completion = false; /* TAB pressed, navigating completions. */
+    size_t completion_idx = 0;  /* Index of next completion to propose. */
+    int ifd = STDIN_FILENO;     /* Terminal stdin file descriptor. */
+    int ofd = STDOUT_FILENO;    /* Terminal stdout file descriptor. */
+    std::string buf;            /* Edited line buffer. */
+    std::string prompt;         /* Prompt to display. */
+    size_t pos = 0;             /* Current cursor position (bytes). */
+    size_t oldpos = 0;          /* Previous refresh cursor position. */
+    size_t cols = 80;           /* Number of columns in terminal. */
+    size_t oldrows = 0;         /* Rows used by last refreshed line. */
+    int oldrpos = 1;            /* Cursor row from last refresh. */
+    int history_index = 0;      /* History index we are editing. */
+    bool history_entry_active = false; /* Temp history entry not yet removed. */
+    /* Folded byte ranges of buf (display-only), sorted by start offset. */
+    std::vector<std::pair<size_t, size_t>> folds;
+};
+
+inline State *active_state = nullptr; /* For Hide()/Show(). */
+
+/* ===================== Low level terminal handling ======================== */
+
+inline bool assume_tty() { return std::getenv("LINENOISE_ASSUME_TTY") != nullptr; }
 
 #ifdef _WIN32
 
-namespace ansi {
+inline DWORD orig_console_in_mode = 0;
+inline DWORD orig_console_out_mode = 0;
+inline bool console_out_mode_saved = false;
+inline std::string console_in_queue;
+inline size_t console_in_queue_pos = 0;
+inline wchar_t console_pending_high_surrogate = 0;
 
-#define lenof(array) (sizeof(array)/sizeof(*(array)))
-
-typedef struct
-{
-    BYTE foreground;    // ANSI base color (0 to 7; add 30)
-    BYTE background;    // ANSI base color (0 to 7; add 40)
-    BYTE bold;  // console FOREGROUND_INTENSITY bit
-    BYTE underline; // console BACKGROUND_INTENSITY bit
-    BYTE rvideo;    // swap foreground/bold & background/underline
-    BYTE concealed; // set foreground/bold to background/underline
-    BYTE reverse; // swap console foreground & background attributes
-} GRM, *PGRM;   // Graphic Rendition Mode
-
-
-inline bool is_digit(char c) { return '0' <= c && c <= '9'; }
-
-// ========== Global variables and constants
-
-HANDLE    hConOut;      // handle to CONOUT$
-
-const char ESC = '\x1B'; // ESCape character
-const char BEL = '\x07';
-const char SO = '\x0E';  // Shift Out
-const char SI = '\x0F';  // Shift In
-
-const int MAX_ARG = 16;     // max number of args in an escape sequence
-int   state;                // automata state
-WCHAR prefix;               // escape sequence prefix ( '[', ']' or '(' );
-WCHAR prefix2;              // secondary prefix ( '?' or '>' );
-WCHAR suffix;               // escape sequence suffix
-int   es_argc;              // escape sequence args count
-int   es_argv[MAX_ARG];     // escape sequence args
-WCHAR Pt_arg[MAX_PATH * 2]; // text parameter for Operating System Command
-int   Pt_len;
-BOOL  shifted;
-
-
-// DEC Special Graphics Character Set from
-// http://vt100.net/docs/vt220-rm/table2-4.html
-// Some of these may not look right, depending on the font and code page (in
-// particular, the Control Pictures probably won't work at all).
-const WCHAR G1[] =
-{
-    ' ',          // _ - blank
-    L'\x2666',    // ` - Black Diamond Suit
-    L'\x2592',    // a - Medium Shade
-    L'\x2409',    // b - HT
-    L'\x240c',    // c - FF
-    L'\x240d',    // d - CR
-    L'\x240a',    // e - LF
-    L'\x00b0',    // f - Degree Sign
-    L'\x00b1',    // g - Plus-Minus Sign
-    L'\x2424',    // h - NL
-    L'\x240b',    // i - VT
-    L'\x2518',    // j - Box Drawings Light Up And Left
-    L'\x2510',    // k - Box Drawings Light Down And Left
-    L'\x250c',    // l - Box Drawings Light Down And Right
-    L'\x2514',    // m - Box Drawings Light Up And Right
-    L'\x253c',    // n - Box Drawings Light Vertical And Horizontal
-    L'\x00af',    // o - SCAN 1 - Macron
-    L'\x25ac',    // p - SCAN 3 - Black Rectangle
-    L'\x2500',    // q - SCAN 5 - Box Drawings Light Horizontal
-    L'_',         // r - SCAN 7 - Low Line
-    L'_',         // s - SCAN 9 - Low Line
-    L'\x251c',    // t - Box Drawings Light Vertical And Right
-    L'\x2524',    // u - Box Drawings Light Vertical And Left
-    L'\x2534',    // v - Box Drawings Light Up And Horizontal
-    L'\x252c',    // w - Box Drawings Light Down And Horizontal
-    L'\x2502',    // x - Box Drawings Light Vertical
-    L'\x2264',    // y - Less-Than Or Equal To
-    L'\x2265',    // z - Greater-Than Or Equal To
-    L'\x03c0',    // { - Greek Small Letter Pi
-    L'\x2260',    // | - Not Equal To
-    L'\x00a3',    // } - Pound Sign
-    L'\x00b7',    // ~ - Middle Dot
-};
-
-#define FIRST_G1 '_'
-#define LAST_G1  '~'
-
-
-// color constants
-
-#define FOREGROUND_BLACK 0
-#define FOREGROUND_WHITE FOREGROUND_RED|FOREGROUND_GREEN|FOREGROUND_BLUE
-
-#define BACKGROUND_BLACK 0
-#define BACKGROUND_WHITE BACKGROUND_RED|BACKGROUND_GREEN|BACKGROUND_BLUE
-
-const BYTE foregroundcolor[8] =
-    {
-    FOREGROUND_BLACK,                   // black foreground
-    FOREGROUND_RED,                     // red foreground
-    FOREGROUND_GREEN,                   // green foreground
-    FOREGROUND_RED | FOREGROUND_GREEN,  // yellow foreground
-    FOREGROUND_BLUE,                    // blue foreground
-    FOREGROUND_BLUE | FOREGROUND_RED,   // magenta foreground
-    FOREGROUND_BLUE | FOREGROUND_GREEN, // cyan foreground
-    FOREGROUND_WHITE                    // white foreground
-    };
-
-const BYTE backgroundcolor[8] =
-    {
-    BACKGROUND_BLACK,           // black background
-    BACKGROUND_RED,         // red background
-    BACKGROUND_GREEN,           // green background
-    BACKGROUND_RED | BACKGROUND_GREEN,  // yellow background
-    BACKGROUND_BLUE,            // blue background
-    BACKGROUND_BLUE | BACKGROUND_RED,   // magenta background
-    BACKGROUND_BLUE | BACKGROUND_GREEN, // cyan background
-    BACKGROUND_WHITE,           // white background
-    };
-
-const BYTE attr2ansi[8] =       // map console attribute to ANSI number
-{
-    0,                  // black
-    4,                  // blue
-    2,                  // green
-    6,                  // cyan
-    1,                  // red
-    5,                  // magenta
-    3,                  // yellow
-    7                   // white
-};
-
-GRM grm;
-
-// saved cursor position
-COORD SavePos;
-
-// ========== Print Buffer functions
-
-#define BUFFER_SIZE 2048
-
-int   nCharInBuffer;
-WCHAR ChBuffer[BUFFER_SIZE];
-
-//-----------------------------------------------------------------------------
-//   FlushBuffer()
-// Writes the buffer to the console and empties it.
-//-----------------------------------------------------------------------------
-
-inline void FlushBuffer(void)
-{
-    DWORD nWritten;
-    if (nCharInBuffer <= 0) return;
-    WriteConsoleW(hConOut, ChBuffer, nCharInBuffer, &nWritten, NULL);
-    nCharInBuffer = 0;
+/* True if fd refers to a real console; stores the console handle. */
+inline bool console_handle(int fd, HANDLE *out = nullptr) {
+    HANDLE h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD mode;
+    if (!GetConsoleMode(h, &mode)) return false;
+    if (out) *out = h;
+    return true;
 }
 
-//-----------------------------------------------------------------------------
-//   PushBuffer( WCHAR c )
-// Adds a character in the buffer.
-//-----------------------------------------------------------------------------
+inline bool is_tty(int fd) { return console_handle(fd); }
 
-inline void PushBuffer(WCHAR c)
-{
-    if (shifted && c >= FIRST_G1 && c <= LAST_G1)
-        c = G1[c - FIRST_G1];
-    ChBuffer[nCharInBuffer] = c;
-    if (++nCharInBuffer == BUFFER_SIZE)
-        FlushBuffer();
-}
-
-//-----------------------------------------------------------------------------
-//   SendSequence( LPCWSTR seq )
-// Send the string to the input buffer.
-//-----------------------------------------------------------------------------
-
-inline void SendSequence(LPCWSTR seq)
-{
-    DWORD out;
-    INPUT_RECORD in;
-    HANDLE hStdIn = GetStdHandle(STD_INPUT_HANDLE);
-
-    in.EventType = KEY_EVENT;
-    in.Event.KeyEvent.bKeyDown = TRUE;
-    in.Event.KeyEvent.wRepeatCount = 1;
-    in.Event.KeyEvent.wVirtualKeyCode = 0;
-    in.Event.KeyEvent.wVirtualScanCode = 0;
-    in.Event.KeyEvent.dwControlKeyState = 0;
-    for (; *seq; ++seq)
-        {
-        in.Event.KeyEvent.uChar.UnicodeChar = *seq;
-        WriteConsoleInput(hStdIn, &in, 1, &out);
+/* Read one byte of UTF-8 input. Console input is read with ReadConsoleW
+ * (UTF-16, surrogate pairs handled) and transcoded to UTF-8 so the editing
+ * engine sees the same byte stream as on Unix. With virtual terminal input
+ * enabled, special keys arrive as VT escape sequences in this stream. */
+inline int read_byte(int fd, char *c) {
+    HANDLE h;
+    if (!console_handle(fd, &h))
+        return static_cast<int>(_read(fd, c, 1));
+    while (console_in_queue_pos >= console_in_queue.size()) {
+        console_in_queue.clear();
+        console_in_queue_pos = 0;
+        wchar_t wc;
+        DWORD nread = 0;
+        if (!ReadConsoleW(h, &wc, 1, &nread, nullptr)) {
+            errno = EIO;
+            return -1;
         }
-}
-
-// ========== Print functions
-
-//-----------------------------------------------------------------------------
-//   InterpretEscSeq()
-// Interprets the last escape sequence scanned by ParseAndPrintANSIString
-//   prefix             escape sequence prefix
-//   es_argc            escape sequence args count
-//   es_argv[]          escape sequence args array
-//   suffix             escape sequence suffix
-//
-// for instance, with \e[33;45;1m we have
-// prefix = '[',
-// es_argc = 3, es_argv[0] = 33, es_argv[1] = 45, es_argv[2] = 1
-// suffix = 'm'
-//-----------------------------------------------------------------------------
-
-inline void InterpretEscSeq(void)
-{
-    WORD attribute;
-    CONSOLE_SCREEN_BUFFER_INFO Info;
-    CONSOLE_CURSOR_INFO CursInfo;
-    DWORD len, NumberOfCharsWritten;
-    COORD Pos;
-    SMALL_RECT Rect;
-    CHAR_INFO  CharInfo;
-
-    if (prefix == '[')
-        {
-        if (prefix2 == '?' && (suffix == 'h' || suffix == 'l'))
-            {
-            if (es_argc == 1 && es_argv[0] == 25)
-                {
-                GetConsoleCursorInfo(hConOut, &CursInfo);
-                CursInfo.bVisible = (suffix == 'h');
-                SetConsoleCursorInfo(hConOut, &CursInfo);
-                return;
-                }
-            }
-        // Ignore any other \e[? or \e[> sequences.
-        if (prefix2 != 0)
-            return;
-
-        GetConsoleScreenBufferInfo(hConOut, &Info);
-        switch (suffix)
-            {
-                case 'm':
-                    if (es_argc == 0) es_argv[es_argc++] = 0;
-                    for (int i = 0; i < es_argc; i++)
-                        {
-                        if (30 <= es_argv[i] && es_argv[i] <= 37)
-                            grm.foreground = es_argv[i] - 30;
-                        else if (40 <= es_argv[i] && es_argv[i] <= 47)
-                            grm.background = es_argv[i] - 40;
-                        else switch (es_argv[i])
-                            {
-                                case 0:
-                                case 39:
-                                case 49:
-                                        {
-                                        WCHAR def[4];
-                                        int   a;
-                                        *def = '7'; def[1] = '\0';
-                                        GetEnvironmentVariableW(L"ANSICON_DEF", def, lenof(def));
-                                        a = wcstol(def, NULL, 16);
-                                        grm.reverse = FALSE;
-                                        if (a < 0)
-                                            {
-                                            grm.reverse = TRUE;
-                                            a = -a;
-                                            }
-                                        if (es_argv[i] != 49)
-                                            grm.foreground = attr2ansi[a & 7];
-                                        if (es_argv[i] != 39)
-                                            grm.background = attr2ansi[(a >> 4) & 7];
-                                        if (es_argv[i] == 0)
-                                            {
-                                            if (es_argc == 1)
-                                                {
-                                                grm.bold = a & FOREGROUND_INTENSITY;
-                                                grm.underline = a & BACKGROUND_INTENSITY;
-                                                }
-                                            else
-                                                {
-                                                grm.bold = 0;
-                                                grm.underline = 0;
-                                                }
-                                            grm.rvideo = 0;
-                                            grm.concealed = 0;
-                                            }
-                                        }
-                                        break;
-
-                                case  1: grm.bold = FOREGROUND_INTENSITY; break;
-                                case  5: // blink
-                                case  4: grm.underline = BACKGROUND_INTENSITY; break;
-                                case  7: grm.rvideo = 1; break;
-                                case  8: grm.concealed = 1; break;
-                                case 21: // oops, this actually turns on double underline
-                                case 22: grm.bold = 0; break;
-                                case 25:
-                                case 24: grm.underline = 0; break;
-                                case 27: grm.rvideo = 0; break;
-                                case 28: grm.concealed = 0; break;
-                            }
-                        }
-                    if (grm.concealed)
-                        {
-                        if (grm.rvideo)
-                            {
-                            attribute = foregroundcolor[grm.foreground]
-                                | backgroundcolor[grm.foreground];
-                            if (grm.bold)
-                                attribute |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
-                            }
-                        else
-                            {
-                            attribute = foregroundcolor[grm.background]
-                                | backgroundcolor[grm.background];
-                            if (grm.underline)
-                                attribute |= FOREGROUND_INTENSITY | BACKGROUND_INTENSITY;
-                            }
-                        }
-                    else if (grm.rvideo)
-                        {
-                        attribute = foregroundcolor[grm.background]
-                            | backgroundcolor[grm.foreground];
-                        if (grm.bold)
-                            attribute |= BACKGROUND_INTENSITY;
-                        if (grm.underline)
-                            attribute |= FOREGROUND_INTENSITY;
-                        }
-                    else
-                        attribute = foregroundcolor[grm.foreground] | grm.bold
-                        | backgroundcolor[grm.background] | grm.underline;
-                    if (grm.reverse)
-                        attribute = ((attribute >> 4) & 15) | ((attribute & 15) << 4);
-                    SetConsoleTextAttribute(hConOut, attribute);
-                    return;
-
-                case 'J':
-                    if (es_argc == 0) es_argv[es_argc++] = 0; // ESC[J == ESC[0J
-                    if (es_argc != 1) return;
-                    switch (es_argv[0])
-                        {
-                            case 0:     // ESC[0J erase from cursor to end of display
-                                len = (Info.dwSize.Y - Info.dwCursorPosition.Y - 1) * Info.dwSize.X
-                                    + Info.dwSize.X - Info.dwCursorPosition.X - 1;
-                                FillConsoleOutputCharacter(hConOut, ' ', len,
-                                    Info.dwCursorPosition,
-                                    &NumberOfCharsWritten);
-                                FillConsoleOutputAttribute(hConOut, Info.wAttributes, len,
-                                    Info.dwCursorPosition,
-                                    &NumberOfCharsWritten);
-                                return;
-
-                            case 1:     // ESC[1J erase from start to cursor.
-                                Pos.X = 0;
-                                Pos.Y = 0;
-                                len = Info.dwCursorPosition.Y * Info.dwSize.X
-                                    + Info.dwCursorPosition.X + 1;
-                                FillConsoleOutputCharacter(hConOut, ' ', len, Pos,
-                                    &NumberOfCharsWritten);
-                                FillConsoleOutputAttribute(hConOut, Info.wAttributes, len, Pos,
-                                    &NumberOfCharsWritten);
-                                return;
-
-                            case 2:     // ESC[2J Clear screen and home cursor
-                                Pos.X = 0;
-                                Pos.Y = 0;
-                                len = Info.dwSize.X * Info.dwSize.Y;
-                                FillConsoleOutputCharacter(hConOut, ' ', len, Pos,
-                                    &NumberOfCharsWritten);
-                                FillConsoleOutputAttribute(hConOut, Info.wAttributes, len, Pos,
-                                    &NumberOfCharsWritten);
-                                SetConsoleCursorPosition(hConOut, Pos);
-                                return;
-
-                            default:
-                                return;
-                        }
-
-                case 'K':
-                    if (es_argc == 0) es_argv[es_argc++] = 0; // ESC[K == ESC[0K
-                    if (es_argc != 1) return;
-                    switch (es_argv[0])
-                        {
-                            case 0:     // ESC[0K Clear to end of line
-                                len = Info.dwSize.X - Info.dwCursorPosition.X + 1;
-                                FillConsoleOutputCharacter(hConOut, ' ', len,
-                                    Info.dwCursorPosition,
-                                    &NumberOfCharsWritten);
-                                FillConsoleOutputAttribute(hConOut, Info.wAttributes, len,
-                                    Info.dwCursorPosition,
-                                    &NumberOfCharsWritten);
-                                return;
-
-                            case 1:     // ESC[1K Clear from start of line to cursor
-                                Pos.X = 0;
-                                Pos.Y = Info.dwCursorPosition.Y;
-                                FillConsoleOutputCharacter(hConOut, ' ',
-                                    Info.dwCursorPosition.X + 1, Pos,
-                                    &NumberOfCharsWritten);
-                                FillConsoleOutputAttribute(hConOut, Info.wAttributes,
-                                    Info.dwCursorPosition.X + 1, Pos,
-                                    &NumberOfCharsWritten);
-                                return;
-
-                            case 2:     // ESC[2K Clear whole line.
-                                Pos.X = 0;
-                                Pos.Y = Info.dwCursorPosition.Y;
-                                FillConsoleOutputCharacter(hConOut, ' ', Info.dwSize.X, Pos,
-                                    &NumberOfCharsWritten);
-                                FillConsoleOutputAttribute(hConOut, Info.wAttributes,
-                                    Info.dwSize.X, Pos,
-                                    &NumberOfCharsWritten);
-                                return;
-
-                            default:
-                                return;
-                        }
-
-                case 'X':                 // ESC[#X Erase # characters.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[X == ESC[1X
-                    if (es_argc != 1) return;
-                    FillConsoleOutputCharacter(hConOut, ' ', es_argv[0],
-                        Info.dwCursorPosition,
-                        &NumberOfCharsWritten);
-                    FillConsoleOutputAttribute(hConOut, Info.wAttributes, es_argv[0],
-                        Info.dwCursorPosition,
-                        &NumberOfCharsWritten);
-                    return;
-
-                case 'L':                 // ESC[#L Insert # blank lines.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[L == ESC[1L
-                    if (es_argc != 1) return;
-                    Rect.Left = 0;
-                    Rect.Top = Info.dwCursorPosition.Y;
-                    Rect.Right = Info.dwSize.X - 1;
-                    Rect.Bottom = Info.dwSize.Y - 1;
-                    Pos.X = 0;
-                    Pos.Y = Info.dwCursorPosition.Y + es_argv[0];
-                    CharInfo.Char.UnicodeChar = ' ';
-                    CharInfo.Attributes = Info.wAttributes;
-                    ScrollConsoleScreenBuffer(hConOut, &Rect, NULL, Pos, &CharInfo);
-                    return;
-
-                case 'M':                 // ESC[#M Delete # lines.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[M == ESC[1M
-                    if (es_argc != 1) return;
-                    if (es_argv[0] > Info.dwSize.Y - Info.dwCursorPosition.Y)
-                        es_argv[0] = Info.dwSize.Y - Info.dwCursorPosition.Y;
-                    Rect.Left = 0;
-                    Rect.Top = Info.dwCursorPosition.Y + es_argv[0];
-                    Rect.Right = Info.dwSize.X - 1;
-                    Rect.Bottom = Info.dwSize.Y - 1;
-                    Pos.X = 0;
-                    Pos.Y = Info.dwCursorPosition.Y;
-                    CharInfo.Char.UnicodeChar = ' ';
-                    CharInfo.Attributes = Info.wAttributes;
-                    ScrollConsoleScreenBuffer(hConOut, &Rect, NULL, Pos, &CharInfo);
-                    return;
-
-                case 'P':                 // ESC[#P Delete # characters.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[P == ESC[1P
-                    if (es_argc != 1) return;
-                    if (Info.dwCursorPosition.X + es_argv[0] > Info.dwSize.X - 1)
-                        es_argv[0] = Info.dwSize.X - Info.dwCursorPosition.X;
-                    Rect.Left = Info.dwCursorPosition.X + es_argv[0];
-                    Rect.Top = Info.dwCursorPosition.Y;
-                    Rect.Right = Info.dwSize.X - 1;
-                    Rect.Bottom = Info.dwCursorPosition.Y;
-                    CharInfo.Char.UnicodeChar = ' ';
-                    CharInfo.Attributes = Info.wAttributes;
-                    ScrollConsoleScreenBuffer(hConOut, &Rect, NULL, Info.dwCursorPosition,
-                        &CharInfo);
-                    return;
-
-                case '@':                 // ESC[#@ Insert # blank characters.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[@ == ESC[1@
-                    if (es_argc != 1) return;
-                    if (Info.dwCursorPosition.X + es_argv[0] > Info.dwSize.X - 1)
-                        es_argv[0] = Info.dwSize.X - Info.dwCursorPosition.X;
-                    Rect.Left = Info.dwCursorPosition.X;
-                    Rect.Top = Info.dwCursorPosition.Y;
-                    Rect.Right = Info.dwSize.X - 1 - es_argv[0];
-                    Rect.Bottom = Info.dwCursorPosition.Y;
-                    Pos.X = Info.dwCursorPosition.X + es_argv[0];
-                    Pos.Y = Info.dwCursorPosition.Y;
-                    CharInfo.Char.UnicodeChar = ' ';
-                    CharInfo.Attributes = Info.wAttributes;
-                    ScrollConsoleScreenBuffer(hConOut, &Rect, NULL, Pos, &CharInfo);
-                    return;
-
-                case 'k':                 // ESC[#k
-                case 'A':                 // ESC[#A Moves cursor up # lines
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[A == ESC[1A
-                    if (es_argc != 1) return;
-                    Pos.Y = Info.dwCursorPosition.Y - es_argv[0];
-                    if (Pos.Y < 0) Pos.Y = 0;
-                    Pos.X = Info.dwCursorPosition.X;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 'e':                 // ESC[#e
-                case 'B':                 // ESC[#B Moves cursor down # lines
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[B == ESC[1B
-                    if (es_argc != 1) return;
-                    Pos.Y = Info.dwCursorPosition.Y + es_argv[0];
-                    if (Pos.Y >= Info.dwSize.Y) Pos.Y = Info.dwSize.Y - 1;
-                    Pos.X = Info.dwCursorPosition.X;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 'a':                 // ESC[#a
-                case 'C':                 // ESC[#C Moves cursor forward # spaces
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[C == ESC[1C
-                    if (es_argc != 1) return;
-                    Pos.X = Info.dwCursorPosition.X + es_argv[0];
-                    if (Pos.X >= Info.dwSize.X) Pos.X = Info.dwSize.X - 1;
-                    Pos.Y = Info.dwCursorPosition.Y;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 'j':                 // ESC[#j
-                case 'D':                 // ESC[#D Moves cursor back # spaces
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[D == ESC[1D
-                    if (es_argc != 1) return;
-                    Pos.X = Info.dwCursorPosition.X - es_argv[0];
-                    if (Pos.X < 0) Pos.X = 0;
-                    Pos.Y = Info.dwCursorPosition.Y;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 'E':                 // ESC[#E Moves cursor down # lines, column 1.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[E == ESC[1E
-                    if (es_argc != 1) return;
-                    Pos.Y = Info.dwCursorPosition.Y + es_argv[0];
-                    if (Pos.Y >= Info.dwSize.Y) Pos.Y = Info.dwSize.Y - 1;
-                    Pos.X = 0;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 'F':                 // ESC[#F Moves cursor up # lines, column 1.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[F == ESC[1F
-                    if (es_argc != 1) return;
-                    Pos.Y = Info.dwCursorPosition.Y - es_argv[0];
-                    if (Pos.Y < 0) Pos.Y = 0;
-                    Pos.X = 0;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case '`':                 // ESC[#`
-                case 'G':                 // ESC[#G Moves cursor column # in current row.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[G == ESC[1G
-                    if (es_argc != 1) return;
-                    Pos.X = es_argv[0] - 1;
-                    if (Pos.X >= Info.dwSize.X) Pos.X = Info.dwSize.X - 1;
-                    if (Pos.X < 0) Pos.X = 0;
-                    Pos.Y = Info.dwCursorPosition.Y;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 'd':                 // ESC[#d Moves cursor row #, current column.
-                    if (es_argc == 0) es_argv[es_argc++] = 1; // ESC[d == ESC[1d
-                    if (es_argc != 1) return;
-                    Pos.Y = es_argv[0] - 1;
-                    if (Pos.Y < 0) Pos.Y = 0;
-                    if (Pos.Y >= Info.dwSize.Y) Pos.Y = Info.dwSize.Y - 1;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 'f':                 // ESC[#;#f
-                case 'H':                 // ESC[#;#H Moves cursor to line #, column #
-                    if (es_argc == 0)
-                        es_argv[es_argc++] = 1; // ESC[H == ESC[1;1H
-                    if (es_argc == 1)
-                        es_argv[es_argc++] = 1; // ESC[#H == ESC[#;1H
-                    if (es_argc > 2) return;
-                    Pos.X = es_argv[1] - 1;
-                    if (Pos.X < 0) Pos.X = 0;
-                    if (Pos.X >= Info.dwSize.X) Pos.X = Info.dwSize.X - 1;
-                    Pos.Y = es_argv[0] - 1;
-                    if (Pos.Y < 0) Pos.Y = 0;
-                    if (Pos.Y >= Info.dwSize.Y) Pos.Y = Info.dwSize.Y - 1;
-                    SetConsoleCursorPosition(hConOut, Pos);
-                    return;
-
-                case 's':                 // ESC[s Saves cursor position for recall later
-                    if (es_argc != 0) return;
-                    SavePos = Info.dwCursorPosition;
-                    return;
-
-                case 'u':                 // ESC[u Return to saved cursor position
-                    if (es_argc != 0) return;
-                    SetConsoleCursorPosition(hConOut, SavePos);
-                    return;
-
-                case 'n':                 // ESC[#n Device status report
-                    if (es_argc != 1) return; // ESC[n == ESC[0n -> ignored
-                    switch (es_argv[0])
-                        {
-                            case 5:     // ESC[5n Report status
-                                SendSequence(L"\33[0n"); // "OK"
-                                return;
-
-                            case 6:     // ESC[6n Report cursor position
-                                    {
-                                    WCHAR buf[32];
-                                    swprintf(buf, 32, L"\33[%d;%dR", Info.dwCursorPosition.Y + 1,
-                                        Info.dwCursorPosition.X + 1);
-                                    SendSequence(buf);
-                                    }
-                                    return;
-
-                            default:
-                                return;
-                        }
-
-                case 't':                 // ESC[#t Window manipulation
-                    if (es_argc != 1) return;
-                    if (es_argv[0] == 21)   // ESC[21t Report xterm window's title
-                        {
-                        WCHAR buf[MAX_PATH * 2];
-                        len = GetConsoleTitleW(buf + 3, lenof(buf) - 3 - 2);
-                        // Too bad if it's too big or fails.
-                        buf[0] = ESC;
-                        buf[1] = ']';
-                        buf[2] = 'l';
-                        buf[3 + len] = ESC;
-                        buf[3 + len + 1] = '\\';
-                        buf[3 + len + 2] = '\0';
-                        SendSequence(buf);
-                        }
-                    return;
-
-                default:
-                    return;
-            }
-        }
-    else // (prefix == ']')
-        {
-        // Ignore any \e]? or \e]> sequences.
-        if (prefix2 != 0)
-            return;
-
-        if (es_argc == 1 && es_argv[0] == 0) // ESC]0;titleST
-            {
-            SetConsoleTitleW(Pt_arg);
-            }
-        }
-}
-
-//-----------------------------------------------------------------------------
-//   ParseAndPrintANSIString(hDev, lpBuffer, nNumberOfBytesToWrite)
-// Parses the string lpBuffer, interprets the escapes sequences and prints the
-// characters in the device hDev (console).
-// The lexer is a three states automata.
-// If the number of arguments es_argc > MAX_ARG, only the MAX_ARG-1 firsts and
-// the last arguments are processed (no es_argv[] overflow).
-//-----------------------------------------------------------------------------
-
-inline BOOL ParseAndPrintANSIString(HANDLE hDev, LPCVOID lpBuffer, DWORD nNumberOfBytesToWrite, LPDWORD lpNumberOfBytesWritten)
-{
-    DWORD   i;
-    LPCSTR s;
-
-    if (hDev != hConOut)    // reinit if device has changed
-        {
-        hConOut = hDev;
-        state = 1;
-        shifted = FALSE;
-        }
-    for (i = nNumberOfBytesToWrite, s = (LPCSTR)lpBuffer; i > 0; i--, s++)
-        {
-        if (state == 1)
-            {
-            if (*s == ESC) state = 2;
-            else if (*s == SO) shifted = TRUE;
-            else if (*s == SI) shifted = FALSE;
-            else PushBuffer(*s);
-            }
-        else if (state == 2)
-            {
-            if (*s == ESC); // \e\e...\e == \e
-            else if ((*s == '[') || (*s == ']'))
-                {
-                FlushBuffer();
-                prefix = *s;
-                prefix2 = 0;
-                state = 3;
-                Pt_len = 0;
-                *Pt_arg = '\0';
-                }
-            else if (*s == ')' || *s == '(') state = 6;
-            else state = 1;
-            }
-        else if (state == 3)
-            {
-            if (is_digit(*s))
-                {
-                es_argc = 0;
-                es_argv[0] = *s - '0';
-                state = 4;
-                }
-            else if (*s == ';')
-                {
-                es_argc = 1;
-                es_argv[0] = 0;
-                es_argv[1] = 0;
-                state = 4;
-                }
-            else if (*s == '?' || *s == '>')
-                {
-                prefix2 = *s;
-                }
-            else
-                {
-                es_argc = 0;
-                suffix = *s;
-                InterpretEscSeq();
-                state = 1;
-                }
-            }
-        else if (state == 4)
-            {
-            if (is_digit(*s))
-                {
-                es_argv[es_argc] = 10 * es_argv[es_argc] + (*s - '0');
-                }
-            else if (*s == ';')
-                {
-                if (es_argc < MAX_ARG - 1) es_argc++;
-                es_argv[es_argc] = 0;
-                if (prefix == ']')
-                    state = 5;
-                }
-            else
-                {
-                es_argc++;
-                suffix = *s;
-                InterpretEscSeq();
-                state = 1;
-                }
-            }
-        else if (state == 5)
-            {
-            if (*s == BEL)
-                {
-                Pt_arg[Pt_len] = '\0';
-                InterpretEscSeq();
-                state = 1;
-                }
-            else if (*s == '\\' && Pt_len > 0 && Pt_arg[Pt_len - 1] == ESC)
-                {
-                Pt_arg[--Pt_len] = '\0';
-                InterpretEscSeq();
-                state = 1;
-                }
-            else if (Pt_len < lenof(Pt_arg) - 1)
-                Pt_arg[Pt_len++] = *s;
-            }
-        else if (state == 6)
-            {
-            // Ignore it (ESC ) 0 is implicit; nothing else is supported).
-            state = 1;
-            }
-        }
-    FlushBuffer();
-    if (lpNumberOfBytesWritten != NULL)
-        *lpNumberOfBytesWritten = nNumberOfBytesToWrite - i;
-    return (i == 0);
-}
-
-} // namespace ansi
-
-HANDLE hOut;
-HANDLE hIn;
-DWORD consolemodeIn = 0;
-
-inline int win32read(int *c) {
-    DWORD foo;
-    INPUT_RECORD b;
-    KEY_EVENT_RECORD e;
-    BOOL altgr;
-
-    while (1) {
-        if (!ReadConsoleInput(hIn, &b, 1, &foo)) return 0;
-        if (!foo) return 0;
-
-        if (b.EventType == KEY_EVENT && b.Event.KeyEvent.bKeyDown) {
-
-            e = b.Event.KeyEvent;
-            *c = b.Event.KeyEvent.uChar.AsciiChar;
-
-            altgr = e.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_ALT_PRESSED);
-
-            if (e.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED) && !altgr) {
-
-                /* Ctrl+Key */
-                switch (*c) {
-                    case 'D':
-                        *c = 4;
-                        return 1;
-                    case 'C':
-                        *c = 3;
-                        return 1;
-                    case 'H':
-                        *c = 8;
-                        return 1;
-                    case 'T':
-                        *c = 20;
-                        return 1;
-                    case 'B': /* ctrl-b, left_arrow */
-                        *c = 2;
-                        return 1;
-                    case 'F': /* ctrl-f right_arrow*/
-                        *c = 6;
-                        return 1;
-                    case 'P': /* ctrl-p up_arrow*/
-                        *c = 16;
-                        return 1;
-                    case 'N': /* ctrl-n down_arrow*/
-                        *c = 14;
-                        return 1;
-                    case 'U': /* Ctrl+u, delete the whole line. */
-                        *c = 21;
-                        return 1;
-                    case 'K': /* Ctrl+k, delete from current to end of line. */
-                        *c = 11;
-                        return 1;
-                    case 'A': /* Ctrl+a, go to the start of the line */
-                        *c = 1;
-                        return 1;
-                    case 'E': /* ctrl+e, go to the end of the line */
-                        *c = 5;
-                        return 1;
-                }
-
-                /* Other Ctrl+KEYs ignored */
-            } else {
-
-                switch (e.wVirtualKeyCode) {
-
-                    case VK_ESCAPE: /* ignore - send ctrl-c, will return -1 */
-                        *c = 3;
-                        return 1;
-                    case VK_RETURN:  /* enter */
-                        *c = 13;
-                        return 1;
-                    case VK_LEFT:   /* left */
-                        *c = 2;
-                        return 1;
-                    case VK_RIGHT: /* right */
-                        *c = 6;
-                        return 1;
-                    case VK_UP:   /* up */
-                        *c = 16;
-                        return 1;
-                    case VK_DOWN:  /* down */
-                        *c = 14;
-                        return 1;
-                    case VK_HOME:
-                        *c = 1;
-                        return 1;
-                    case VK_END:
-                        *c = 5;
-                        return 1;
-                    case VK_BACK:
-                        *c = 8;
-                        return 1;
-                    case VK_DELETE:
-                        *c = 4; /* same as Ctrl+D above */
-                        return 1;
-                    default:
-                        if (*c) return 1;
-                }
-            }
-        }
-    }
-
-    return -1; /* Makes compiler happy */
-}
-
-inline int win32_write(int fd, const void *buffer, unsigned int count) {
-    if (fd == _fileno(stdout)) {
-        DWORD bytesWritten = 0;
-        if (FALSE != ansi::ParseAndPrintANSIString(GetStdHandle(STD_OUTPUT_HANDLE), buffer, (DWORD)count, &bytesWritten)) {
-            return (int)bytesWritten;
-        } else {
-            errno = GetLastError();
-            return 0;
-        }
-    } else if (fd == _fileno(stderr)) {
-        DWORD bytesWritten = 0;
-        if (FALSE != ansi::ParseAndPrintANSIString(GetStdHandle(STD_ERROR_HANDLE), buffer, (DWORD)count, &bytesWritten)) {
-            return (int)bytesWritten;
-        } else {
-            errno = GetLastError();
-            return 0;
-        }
-    } else {
-        return _write(fd, buffer, count);
-    }
-}
-#endif // _WIN32
-
-#ifndef _WIN32
-static struct termios orig_termios; /* In order to restore at exit.*/
-#endif
-static bool rawmode = false; /* For atexit() function to check if restore is needed*/
-static bool atexit_registered = false; /* Register atexit just 1 time. */
-
-enum KEY_ACTION {
-    KEY_NULL = 0,       /* NULL */
-    CTRL_A = 1,         /* Ctrl+a */
-    CTRL_B = 2,         /* Ctrl-b */
-    CTRL_C = 3,         /* Ctrl-c */
-    CTRL_D = 4,         /* Ctrl-d */
-    CTRL_E = 5,         /* Ctrl-e */
-    CTRL_F = 6,         /* Ctrl-f */
-    CTRL_H = 8,         /* Ctrl-h */
-    TAB = 9,            /* Tab */
-    CTRL_K = 11,        /* Ctrl+k */
-    CTRL_L = 12,        /* Ctrl+l */
-    ENTER = 13,         /* Enter */
-    CTRL_N = 14,        /* Ctrl-n */
-    CTRL_P = 16,        /* Ctrl-p */
-    CTRL_T = 20,        /* Ctrl-t */
-    CTRL_U = 21,        /* Ctrl+u */
-    CTRL_W = 23,        /* Ctrl+w */
-    ESC = 27,           /* Escape */
-    BACKSPACE =  127    /* Backspace */
-};
-
-void linenoiseAtExit(void);
-bool AddHistory(const char *line);
-
-/* ============================ UTF8 utilities ============================== */
-
-static unsigned long unicodeWideCharTable[][2] = {
-    { 0x1100, 0x115F }, { 0x2329, 0x232A }, { 0x2E80, 0x2E99, }, { 0x2E9B, 0x2EF3, },
-    { 0x2F00, 0x2FD5, }, { 0x2FF0, 0x2FFB, }, { 0x3000, 0x303E, }, { 0x3041, 0x3096, },
-    { 0x3099, 0x30FF, }, { 0x3105, 0x312D, }, { 0x3131, 0x318E, }, { 0x3190, 0x31BA, },
-    { 0x31C0, 0x31E3, }, { 0x31F0, 0x321E, }, { 0x3220, 0x3247, }, { 0x3250, 0x4DBF, },
-    { 0x4E00, 0xA48C, }, { 0xA490, 0xA4C6, }, { 0xA960, 0xA97C, }, { 0xAC00, 0xD7A3, },
-    { 0xF900, 0xFAFF, }, { 0xFE10, 0xFE19, }, { 0xFE30, 0xFE52, }, { 0xFE54, 0xFE66, },
-    { 0xFE68, 0xFE6B, }, { 0xFF01, 0xFFE6, },
-    { 0x1B000, 0x1B001, }, { 0x1F200, 0x1F202, }, { 0x1F210, 0x1F23A, },
-    { 0x1F240, 0x1F248, }, { 0x1F250, 0x1F251, }, { 0x20000, 0x3FFFD, },
-};
-
-static int unicodeWideCharTableSize = sizeof(unicodeWideCharTable) / sizeof(unicodeWideCharTable[0]);
-
-static int unicodeIsWideChar(unsigned long cp)
-{
-    int i;
-    for (i = 0; i < unicodeWideCharTableSize; i++) {
-        if (unicodeWideCharTable[i][0] <= cp && cp <= unicodeWideCharTable[i][1]) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-static unsigned long unicodeCombiningCharTable[] = {
-    0x0300,0x0301,0x0302,0x0303,0x0304,0x0305,0x0306,0x0307,
-    0x0308,0x0309,0x030A,0x030B,0x030C,0x030D,0x030E,0x030F,
-    0x0310,0x0311,0x0312,0x0313,0x0314,0x0315,0x0316,0x0317,
-    0x0318,0x0319,0x031A,0x031B,0x031C,0x031D,0x031E,0x031F,
-    0x0320,0x0321,0x0322,0x0323,0x0324,0x0325,0x0326,0x0327,
-    0x0328,0x0329,0x032A,0x032B,0x032C,0x032D,0x032E,0x032F,
-    0x0330,0x0331,0x0332,0x0333,0x0334,0x0335,0x0336,0x0337,
-    0x0338,0x0339,0x033A,0x033B,0x033C,0x033D,0x033E,0x033F,
-    0x0340,0x0341,0x0342,0x0343,0x0344,0x0345,0x0346,0x0347,
-    0x0348,0x0349,0x034A,0x034B,0x034C,0x034D,0x034E,0x034F,
-    0x0350,0x0351,0x0352,0x0353,0x0354,0x0355,0x0356,0x0357,
-    0x0358,0x0359,0x035A,0x035B,0x035C,0x035D,0x035E,0x035F,
-    0x0360,0x0361,0x0362,0x0363,0x0364,0x0365,0x0366,0x0367,
-    0x0368,0x0369,0x036A,0x036B,0x036C,0x036D,0x036E,0x036F,
-    0x0483,0x0484,0x0485,0x0486,0x0487,0x0591,0x0592,0x0593,
-    0x0594,0x0595,0x0596,0x0597,0x0598,0x0599,0x059A,0x059B,
-    0x059C,0x059D,0x059E,0x059F,0x05A0,0x05A1,0x05A2,0x05A3,
-    0x05A4,0x05A5,0x05A6,0x05A7,0x05A8,0x05A9,0x05AA,0x05AB,
-    0x05AC,0x05AD,0x05AE,0x05AF,0x05B0,0x05B1,0x05B2,0x05B3,
-    0x05B4,0x05B5,0x05B6,0x05B7,0x05B8,0x05B9,0x05BA,0x05BB,
-    0x05BC,0x05BD,0x05BF,0x05C1,0x05C2,0x05C4,0x05C5,0x05C7,
-    0x0610,0x0611,0x0612,0x0613,0x0614,0x0615,0x0616,0x0617,
-    0x0618,0x0619,0x061A,0x064B,0x064C,0x064D,0x064E,0x064F,
-    0x0650,0x0651,0x0652,0x0653,0x0654,0x0655,0x0656,0x0657,
-    0x0658,0x0659,0x065A,0x065B,0x065C,0x065D,0x065E,0x065F,
-    0x0670,0x06D6,0x06D7,0x06D8,0x06D9,0x06DA,0x06DB,0x06DC,
-    0x06DF,0x06E0,0x06E1,0x06E2,0x06E3,0x06E4,0x06E7,0x06E8,
-    0x06EA,0x06EB,0x06EC,0x06ED,0x0711,0x0730,0x0731,0x0732,
-    0x0733,0x0734,0x0735,0x0736,0x0737,0x0738,0x0739,0x073A,
-    0x073B,0x073C,0x073D,0x073E,0x073F,0x0740,0x0741,0x0742,
-    0x0743,0x0744,0x0745,0x0746,0x0747,0x0748,0x0749,0x074A,
-    0x07A6,0x07A7,0x07A8,0x07A9,0x07AA,0x07AB,0x07AC,0x07AD,
-    0x07AE,0x07AF,0x07B0,0x07EB,0x07EC,0x07ED,0x07EE,0x07EF,
-    0x07F0,0x07F1,0x07F2,0x07F3,0x0816,0x0817,0x0818,0x0819,
-    0x081B,0x081C,0x081D,0x081E,0x081F,0x0820,0x0821,0x0822,
-    0x0823,0x0825,0x0826,0x0827,0x0829,0x082A,0x082B,0x082C,
-    0x082D,0x0859,0x085A,0x085B,0x08E3,0x08E4,0x08E5,0x08E6,
-    0x08E7,0x08E8,0x08E9,0x08EA,0x08EB,0x08EC,0x08ED,0x08EE,
-    0x08EF,0x08F0,0x08F1,0x08F2,0x08F3,0x08F4,0x08F5,0x08F6,
-    0x08F7,0x08F8,0x08F9,0x08FA,0x08FB,0x08FC,0x08FD,0x08FE,
-    0x08FF,0x0900,0x0901,0x0902,0x093A,0x093C,0x0941,0x0942,
-    0x0943,0x0944,0x0945,0x0946,0x0947,0x0948,0x094D,0x0951,
-    0x0952,0x0953,0x0954,0x0955,0x0956,0x0957,0x0962,0x0963,
-    0x0981,0x09BC,0x09C1,0x09C2,0x09C3,0x09C4,0x09CD,0x09E2,
-    0x09E3,0x0A01,0x0A02,0x0A3C,0x0A41,0x0A42,0x0A47,0x0A48,
-    0x0A4B,0x0A4C,0x0A4D,0x0A51,0x0A70,0x0A71,0x0A75,0x0A81,
-    0x0A82,0x0ABC,0x0AC1,0x0AC2,0x0AC3,0x0AC4,0x0AC5,0x0AC7,
-    0x0AC8,0x0ACD,0x0AE2,0x0AE3,0x0B01,0x0B3C,0x0B3F,0x0B41,
-    0x0B42,0x0B43,0x0B44,0x0B4D,0x0B56,0x0B62,0x0B63,0x0B82,
-    0x0BC0,0x0BCD,0x0C00,0x0C3E,0x0C3F,0x0C40,0x0C46,0x0C47,
-    0x0C48,0x0C4A,0x0C4B,0x0C4C,0x0C4D,0x0C55,0x0C56,0x0C62,
-    0x0C63,0x0C81,0x0CBC,0x0CBF,0x0CC6,0x0CCC,0x0CCD,0x0CE2,
-    0x0CE3,0x0D01,0x0D41,0x0D42,0x0D43,0x0D44,0x0D4D,0x0D62,
-    0x0D63,0x0DCA,0x0DD2,0x0DD3,0x0DD4,0x0DD6,0x0E31,0x0E34,
-    0x0E35,0x0E36,0x0E37,0x0E38,0x0E39,0x0E3A,0x0E47,0x0E48,
-    0x0E49,0x0E4A,0x0E4B,0x0E4C,0x0E4D,0x0E4E,0x0EB1,0x0EB4,
-    0x0EB5,0x0EB6,0x0EB7,0x0EB8,0x0EB9,0x0EBB,0x0EBC,0x0EC8,
-    0x0EC9,0x0ECA,0x0ECB,0x0ECC,0x0ECD,0x0F18,0x0F19,0x0F35,
-    0x0F37,0x0F39,0x0F71,0x0F72,0x0F73,0x0F74,0x0F75,0x0F76,
-    0x0F77,0x0F78,0x0F79,0x0F7A,0x0F7B,0x0F7C,0x0F7D,0x0F7E,
-    0x0F80,0x0F81,0x0F82,0x0F83,0x0F84,0x0F86,0x0F87,0x0F8D,
-    0x0F8E,0x0F8F,0x0F90,0x0F91,0x0F92,0x0F93,0x0F94,0x0F95,
-    0x0F96,0x0F97,0x0F99,0x0F9A,0x0F9B,0x0F9C,0x0F9D,0x0F9E,
-    0x0F9F,0x0FA0,0x0FA1,0x0FA2,0x0FA3,0x0FA4,0x0FA5,0x0FA6,
-    0x0FA7,0x0FA8,0x0FA9,0x0FAA,0x0FAB,0x0FAC,0x0FAD,0x0FAE,
-    0x0FAF,0x0FB0,0x0FB1,0x0FB2,0x0FB3,0x0FB4,0x0FB5,0x0FB6,
-    0x0FB7,0x0FB8,0x0FB9,0x0FBA,0x0FBB,0x0FBC,0x0FC6,0x102D,
-    0x102E,0x102F,0x1030,0x1032,0x1033,0x1034,0x1035,0x1036,
-    0x1037,0x1039,0x103A,0x103D,0x103E,0x1058,0x1059,0x105E,
-    0x105F,0x1060,0x1071,0x1072,0x1073,0x1074,0x1082,0x1085,
-    0x1086,0x108D,0x109D,0x135D,0x135E,0x135F,0x1712,0x1713,
-    0x1714,0x1732,0x1733,0x1734,0x1752,0x1753,0x1772,0x1773,
-    0x17B4,0x17B5,0x17B7,0x17B8,0x17B9,0x17BA,0x17BB,0x17BC,
-    0x17BD,0x17C6,0x17C9,0x17CA,0x17CB,0x17CC,0x17CD,0x17CE,
-    0x17CF,0x17D0,0x17D1,0x17D2,0x17D3,0x17DD,0x180B,0x180C,
-    0x180D,0x18A9,0x1920,0x1921,0x1922,0x1927,0x1928,0x1932,
-    0x1939,0x193A,0x193B,0x1A17,0x1A18,0x1A1B,0x1A56,0x1A58,
-    0x1A59,0x1A5A,0x1A5B,0x1A5C,0x1A5D,0x1A5E,0x1A60,0x1A62,
-    0x1A65,0x1A66,0x1A67,0x1A68,0x1A69,0x1A6A,0x1A6B,0x1A6C,
-    0x1A73,0x1A74,0x1A75,0x1A76,0x1A77,0x1A78,0x1A79,0x1A7A,
-    0x1A7B,0x1A7C,0x1A7F,0x1AB0,0x1AB1,0x1AB2,0x1AB3,0x1AB4,
-    0x1AB5,0x1AB6,0x1AB7,0x1AB8,0x1AB9,0x1ABA,0x1ABB,0x1ABC,
-    0x1ABD,0x1B00,0x1B01,0x1B02,0x1B03,0x1B34,0x1B36,0x1B37,
-    0x1B38,0x1B39,0x1B3A,0x1B3C,0x1B42,0x1B6B,0x1B6C,0x1B6D,
-    0x1B6E,0x1B6F,0x1B70,0x1B71,0x1B72,0x1B73,0x1B80,0x1B81,
-    0x1BA2,0x1BA3,0x1BA4,0x1BA5,0x1BA8,0x1BA9,0x1BAB,0x1BAC,
-    0x1BAD,0x1BE6,0x1BE8,0x1BE9,0x1BED,0x1BEF,0x1BF0,0x1BF1,
-    0x1C2C,0x1C2D,0x1C2E,0x1C2F,0x1C30,0x1C31,0x1C32,0x1C33,
-    0x1C36,0x1C37,0x1CD0,0x1CD1,0x1CD2,0x1CD4,0x1CD5,0x1CD6,
-    0x1CD7,0x1CD8,0x1CD9,0x1CDA,0x1CDB,0x1CDC,0x1CDD,0x1CDE,
-    0x1CDF,0x1CE0,0x1CE2,0x1CE3,0x1CE4,0x1CE5,0x1CE6,0x1CE7,
-    0x1CE8,0x1CED,0x1CF4,0x1CF8,0x1CF9,0x1DC0,0x1DC1,0x1DC2,
-    0x1DC3,0x1DC4,0x1DC5,0x1DC6,0x1DC7,0x1DC8,0x1DC9,0x1DCA,
-    0x1DCB,0x1DCC,0x1DCD,0x1DCE,0x1DCF,0x1DD0,0x1DD1,0x1DD2,
-    0x1DD3,0x1DD4,0x1DD5,0x1DD6,0x1DD7,0x1DD8,0x1DD9,0x1DDA,
-    0x1DDB,0x1DDC,0x1DDD,0x1DDE,0x1DDF,0x1DE0,0x1DE1,0x1DE2,
-    0x1DE3,0x1DE4,0x1DE5,0x1DE6,0x1DE7,0x1DE8,0x1DE9,0x1DEA,
-    0x1DEB,0x1DEC,0x1DED,0x1DEE,0x1DEF,0x1DF0,0x1DF1,0x1DF2,
-    0x1DF3,0x1DF4,0x1DF5,0x1DFC,0x1DFD,0x1DFE,0x1DFF,0x20D0,
-    0x20D1,0x20D2,0x20D3,0x20D4,0x20D5,0x20D6,0x20D7,0x20D8,
-    0x20D9,0x20DA,0x20DB,0x20DC,0x20E1,0x20E5,0x20E6,0x20E7,
-    0x20E8,0x20E9,0x20EA,0x20EB,0x20EC,0x20ED,0x20EE,0x20EF,
-    0x20F0,0x2CEF,0x2CF0,0x2CF1,0x2D7F,0x2DE0,0x2DE1,0x2DE2,
-    0x2DE3,0x2DE4,0x2DE5,0x2DE6,0x2DE7,0x2DE8,0x2DE9,0x2DEA,
-    0x2DEB,0x2DEC,0x2DED,0x2DEE,0x2DEF,0x2DF0,0x2DF1,0x2DF2,
-    0x2DF3,0x2DF4,0x2DF5,0x2DF6,0x2DF7,0x2DF8,0x2DF9,0x2DFA,
-    0x2DFB,0x2DFC,0x2DFD,0x2DFE,0x2DFF,0x302A,0x302B,0x302C,
-    0x302D,0x3099,0x309A,0xA66F,0xA674,0xA675,0xA676,0xA677,
-    0xA678,0xA679,0xA67A,0xA67B,0xA67C,0xA67D,0xA69E,0xA69F,
-    0xA6F0,0xA6F1,0xA802,0xA806,0xA80B,0xA825,0xA826,0xA8C4,
-    0xA8E0,0xA8E1,0xA8E2,0xA8E3,0xA8E4,0xA8E5,0xA8E6,0xA8E7,
-    0xA8E8,0xA8E9,0xA8EA,0xA8EB,0xA8EC,0xA8ED,0xA8EE,0xA8EF,
-    0xA8F0,0xA8F1,0xA926,0xA927,0xA928,0xA929,0xA92A,0xA92B,
-    0xA92C,0xA92D,0xA947,0xA948,0xA949,0xA94A,0xA94B,0xA94C,
-    0xA94D,0xA94E,0xA94F,0xA950,0xA951,0xA980,0xA981,0xA982,
-    0xA9B3,0xA9B6,0xA9B7,0xA9B8,0xA9B9,0xA9BC,0xA9E5,0xAA29,
-    0xAA2A,0xAA2B,0xAA2C,0xAA2D,0xAA2E,0xAA31,0xAA32,0xAA35,
-    0xAA36,0xAA43,0xAA4C,0xAA7C,0xAAB0,0xAAB2,0xAAB3,0xAAB4,
-    0xAAB7,0xAAB8,0xAABE,0xAABF,0xAAC1,0xAAEC,0xAAED,0xAAF6,
-    0xABE5,0xABE8,0xABED,0xFB1E,0xFE00,0xFE01,0xFE02,0xFE03,
-    0xFE04,0xFE05,0xFE06,0xFE07,0xFE08,0xFE09,0xFE0A,0xFE0B,
-    0xFE0C,0xFE0D,0xFE0E,0xFE0F,0xFE20,0xFE21,0xFE22,0xFE23,
-    0xFE24,0xFE25,0xFE26,0xFE27,0xFE28,0xFE29,0xFE2A,0xFE2B,
-    0xFE2C,0xFE2D,0xFE2E,0xFE2F,
-    0x101FD,0x102E0,0x10376,0x10377,0x10378,0x10379,0x1037A,0x10A01,
-    0x10A02,0x10A03,0x10A05,0x10A06,0x10A0C,0x10A0D,0x10A0E,0x10A0F,
-    0x10A38,0x10A39,0x10A3A,0x10A3F,0x10AE5,0x10AE6,0x11001,0x11038,
-    0x11039,0x1103A,0x1103B,0x1103C,0x1103D,0x1103E,0x1103F,0x11040,
-    0x11041,0x11042,0x11043,0x11044,0x11045,0x11046,0x1107F,0x11080,
-    0x11081,0x110B3,0x110B4,0x110B5,0x110B6,0x110B9,0x110BA,0x11100,
-    0x11101,0x11102,0x11127,0x11128,0x11129,0x1112A,0x1112B,0x1112D,
-    0x1112E,0x1112F,0x11130,0x11131,0x11132,0x11133,0x11134,0x11173,
-    0x11180,0x11181,0x111B6,0x111B7,0x111B8,0x111B9,0x111BA,0x111BB,
-    0x111BC,0x111BD,0x111BE,0x111CA,0x111CB,0x111CC,0x1122F,0x11230,
-    0x11231,0x11234,0x11236,0x11237,0x112DF,0x112E3,0x112E4,0x112E5,
-    0x112E6,0x112E7,0x112E8,0x112E9,0x112EA,0x11300,0x11301,0x1133C,
-    0x11340,0x11366,0x11367,0x11368,0x11369,0x1136A,0x1136B,0x1136C,
-    0x11370,0x11371,0x11372,0x11373,0x11374,0x114B3,0x114B4,0x114B5,
-    0x114B6,0x114B7,0x114B8,0x114BA,0x114BF,0x114C0,0x114C2,0x114C3,
-    0x115B2,0x115B3,0x115B4,0x115B5,0x115BC,0x115BD,0x115BF,0x115C0,
-    0x115DC,0x115DD,0x11633,0x11634,0x11635,0x11636,0x11637,0x11638,
-    0x11639,0x1163A,0x1163D,0x1163F,0x11640,0x116AB,0x116AD,0x116B0,
-    0x116B1,0x116B2,0x116B3,0x116B4,0x116B5,0x116B7,0x1171D,0x1171E,
-    0x1171F,0x11722,0x11723,0x11724,0x11725,0x11727,0x11728,0x11729,
-    0x1172A,0x1172B,0x16AF0,0x16AF1,0x16AF2,0x16AF3,0x16AF4,0x16B30,
-    0x16B31,0x16B32,0x16B33,0x16B34,0x16B35,0x16B36,0x16F8F,0x16F90,
-    0x16F91,0x16F92,0x1BC9D,0x1BC9E,0x1D167,0x1D168,0x1D169,0x1D17B,
-    0x1D17C,0x1D17D,0x1D17E,0x1D17F,0x1D180,0x1D181,0x1D182,0x1D185,
-    0x1D186,0x1D187,0x1D188,0x1D189,0x1D18A,0x1D18B,0x1D1AA,0x1D1AB,
-    0x1D1AC,0x1D1AD,0x1D242,0x1D243,0x1D244,0x1DA00,0x1DA01,0x1DA02,
-    0x1DA03,0x1DA04,0x1DA05,0x1DA06,0x1DA07,0x1DA08,0x1DA09,0x1DA0A,
-    0x1DA0B,0x1DA0C,0x1DA0D,0x1DA0E,0x1DA0F,0x1DA10,0x1DA11,0x1DA12,
-    0x1DA13,0x1DA14,0x1DA15,0x1DA16,0x1DA17,0x1DA18,0x1DA19,0x1DA1A,
-    0x1DA1B,0x1DA1C,0x1DA1D,0x1DA1E,0x1DA1F,0x1DA20,0x1DA21,0x1DA22,
-    0x1DA23,0x1DA24,0x1DA25,0x1DA26,0x1DA27,0x1DA28,0x1DA29,0x1DA2A,
-    0x1DA2B,0x1DA2C,0x1DA2D,0x1DA2E,0x1DA2F,0x1DA30,0x1DA31,0x1DA32,
-    0x1DA33,0x1DA34,0x1DA35,0x1DA36,0x1DA3B,0x1DA3C,0x1DA3D,0x1DA3E,
-    0x1DA3F,0x1DA40,0x1DA41,0x1DA42,0x1DA43,0x1DA44,0x1DA45,0x1DA46,
-    0x1DA47,0x1DA48,0x1DA49,0x1DA4A,0x1DA4B,0x1DA4C,0x1DA4D,0x1DA4E,
-    0x1DA4F,0x1DA50,0x1DA51,0x1DA52,0x1DA53,0x1DA54,0x1DA55,0x1DA56,
-    0x1DA57,0x1DA58,0x1DA59,0x1DA5A,0x1DA5B,0x1DA5C,0x1DA5D,0x1DA5E,
-    0x1DA5F,0x1DA60,0x1DA61,0x1DA62,0x1DA63,0x1DA64,0x1DA65,0x1DA66,
-    0x1DA67,0x1DA68,0x1DA69,0x1DA6A,0x1DA6B,0x1DA6C,0x1DA75,0x1DA84,
-    0x1DA9B,0x1DA9C,0x1DA9D,0x1DA9E,0x1DA9F,0x1DAA1,0x1DAA2,0x1DAA3,
-    0x1DAA4,0x1DAA5,0x1DAA6,0x1DAA7,0x1DAA8,0x1DAA9,0x1DAAA,0x1DAAB,
-    0x1DAAC,0x1DAAD,0x1DAAE,0x1DAAF,0x1E8D0,0x1E8D1,0x1E8D2,0x1E8D3,
-    0x1E8D4,0x1E8D5,0x1E8D6,0xE0100,0xE0101,0xE0102,0xE0103,0xE0104,
-    0xE0105,0xE0106,0xE0107,0xE0108,0xE0109,0xE010A,0xE010B,0xE010C,
-    0xE010D,0xE010E,0xE010F,0xE0110,0xE0111,0xE0112,0xE0113,0xE0114,
-    0xE0115,0xE0116,0xE0117,0xE0118,0xE0119,0xE011A,0xE011B,0xE011C,
-    0xE011D,0xE011E,0xE011F,0xE0120,0xE0121,0xE0122,0xE0123,0xE0124,
-    0xE0125,0xE0126,0xE0127,0xE0128,0xE0129,0xE012A,0xE012B,0xE012C,
-    0xE012D,0xE012E,0xE012F,0xE0130,0xE0131,0xE0132,0xE0133,0xE0134,
-    0xE0135,0xE0136,0xE0137,0xE0138,0xE0139,0xE013A,0xE013B,0xE013C,
-    0xE013D,0xE013E,0xE013F,0xE0140,0xE0141,0xE0142,0xE0143,0xE0144,
-    0xE0145,0xE0146,0xE0147,0xE0148,0xE0149,0xE014A,0xE014B,0xE014C,
-    0xE014D,0xE014E,0xE014F,0xE0150,0xE0151,0xE0152,0xE0153,0xE0154,
-    0xE0155,0xE0156,0xE0157,0xE0158,0xE0159,0xE015A,0xE015B,0xE015C,
-    0xE015D,0xE015E,0xE015F,0xE0160,0xE0161,0xE0162,0xE0163,0xE0164,
-    0xE0165,0xE0166,0xE0167,0xE0168,0xE0169,0xE016A,0xE016B,0xE016C,
-    0xE016D,0xE016E,0xE016F,0xE0170,0xE0171,0xE0172,0xE0173,0xE0174,
-    0xE0175,0xE0176,0xE0177,0xE0178,0xE0179,0xE017A,0xE017B,0xE017C,
-    0xE017D,0xE017E,0xE017F,0xE0180,0xE0181,0xE0182,0xE0183,0xE0184,
-    0xE0185,0xE0186,0xE0187,0xE0188,0xE0189,0xE018A,0xE018B,0xE018C,
-    0xE018D,0xE018E,0xE018F,0xE0190,0xE0191,0xE0192,0xE0193,0xE0194,
-    0xE0195,0xE0196,0xE0197,0xE0198,0xE0199,0xE019A,0xE019B,0xE019C,
-    0xE019D,0xE019E,0xE019F,0xE01A0,0xE01A1,0xE01A2,0xE01A3,0xE01A4,
-    0xE01A5,0xE01A6,0xE01A7,0xE01A8,0xE01A9,0xE01AA,0xE01AB,0xE01AC,
-    0xE01AD,0xE01AE,0xE01AF,0xE01B0,0xE01B1,0xE01B2,0xE01B3,0xE01B4,
-    0xE01B5,0xE01B6,0xE01B7,0xE01B8,0xE01B9,0xE01BA,0xE01BB,0xE01BC,
-    0xE01BD,0xE01BE,0xE01BF,0xE01C0,0xE01C1,0xE01C2,0xE01C3,0xE01C4,
-    0xE01C5,0xE01C6,0xE01C7,0xE01C8,0xE01C9,0xE01CA,0xE01CB,0xE01CC,
-    0xE01CD,0xE01CE,0xE01CF,0xE01D0,0xE01D1,0xE01D2,0xE01D3,0xE01D4,
-    0xE01D5,0xE01D6,0xE01D7,0xE01D8,0xE01D9,0xE01DA,0xE01DB,0xE01DC,
-    0xE01DD,0xE01DE,0xE01DF,0xE01E0,0xE01E1,0xE01E2,0xE01E3,0xE01E4,
-    0xE01E5,0xE01E6,0xE01E7,0xE01E8,0xE01E9,0xE01EA,0xE01EB,0xE01EC,
-    0xE01ED,0xE01EE,0xE01EF,
-};
-
-static int unicodeCombiningCharTableSize = sizeof(unicodeCombiningCharTable) / sizeof(unicodeCombiningCharTable[0]);
-
-inline int unicodeIsCombiningChar(unsigned long cp)
-{
-    int i;
-    for (i = 0; i < unicodeCombiningCharTableSize; i++) {
-        if (unicodeCombiningCharTable[i] == cp) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/* Get length of previous UTF8 character
- */
-inline int unicodePrevUTF8CharLen(char* buf, int pos)
-{
-    int end = pos--;
-    while (pos >= 0 && ((unsigned char)buf[pos] & 0xC0) == 0x80) {
-        pos--;
-    }
-    return end - pos;
-}
-
-/* Get length of previous UTF8 character
- */
-inline int unicodeUTF8CharLen(char* buf, int buf_len, int pos)
-{
-    if (pos == buf_len) { return 0; }
-    unsigned char ch = buf[pos];
-    if (ch < 0x80) { return 1; }
-    else if (ch < 0xE0) { return 2; }
-    else if (ch < 0xF0) { return 3; }
-    else { return 4; }
-}
-
-/* Convert UTF8 to Unicode code point
- */
-inline int unicodeUTF8CharToCodePoint(
-   const char* buf,
-   int         len,
-   int*        cp)
-{
-    if (len) {
-        unsigned char byte = buf[0];
-        if ((byte & 0x80) == 0) {
-            *cp = byte;
-            return 1;
-        } else if ((byte & 0xE0) == 0xC0) {
-            if (len >= 2) {
-                *cp = (((unsigned long)(buf[0] & 0x1F)) << 6) |
-                       ((unsigned long)(buf[1] & 0x3F));
-                return 2;
-            }
-        } else if ((byte & 0xF0) == 0xE0) {
-            if (len >= 3) {
-                *cp = (((unsigned long)(buf[0] & 0x0F)) << 12) |
-                      (((unsigned long)(buf[1] & 0x3F)) << 6) |
-                       ((unsigned long)(buf[2] & 0x3F));
-                return 3;
-            }
-        } else if ((byte & 0xF8) == 0xF0) {
-            if (len >= 4) {
-                *cp = (((unsigned long)(buf[0] & 0x07)) << 18) |
-                      (((unsigned long)(buf[1] & 0x3F)) << 12) |
-                      (((unsigned long)(buf[2] & 0x3F)) << 6) |
-                       ((unsigned long)(buf[3] & 0x3F));
-                return 4;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Get length of grapheme
- */
-inline int unicodeGraphemeLen(char* buf, int buf_len, int pos)
-{
-    if (pos == buf_len) {
-        return 0;
-    }
-    int beg = pos;
-    pos += unicodeUTF8CharLen(buf, buf_len, pos);
-    while (pos < buf_len) {
-        int len = unicodeUTF8CharLen(buf, buf_len, pos);
-        int cp = 0;
-        unicodeUTF8CharToCodePoint(buf + pos, len, &cp);
-        if (!unicodeIsCombiningChar(cp)) {
-            return pos - beg;
-        }
-        pos += len;
-    }
-    return pos - beg;
-}
-
-/* Get length of previous grapheme
- */
-inline int unicodePrevGraphemeLen(char* buf, int pos)
-{
-    if (pos == 0) {
-        return 0;
-    }
-    int end = pos;
-    while (pos > 0) {
-        int len = unicodePrevUTF8CharLen(buf, pos);
-        pos -= len;
-        int cp = 0;
-        unicodeUTF8CharToCodePoint(buf + pos, len, &cp);
-        if (!unicodeIsCombiningChar(cp)) {
-            return end - pos;
-        }
-    }
-    return 0;
-}
-
-inline int isAnsiEscape(const char* buf, int buf_len, int* len)
-{
-    if (buf_len > 2 && !memcmp("\033[", buf, 2)) {
-        int off = 2;
-        while (off < buf_len) {
-            switch (buf[off++]) {
-            case 'A': case 'B': case 'C': case 'D':
-            case 'E': case 'F': case 'G': case 'H':
-            case 'J': case 'K': case 'S': case 'T':
-            case 'f': case 'm':
-                *len = off;
-                return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Get column position for the single line mode.
- */
-inline int unicodeColumnPos(const char* buf, int buf_len)
-{
-    int ret = 0;
-
-    int off = 0;
-    while (off < buf_len) {
-        int len;
-        if (isAnsiEscape(buf + off, buf_len - off, &len)) {
-            off += len;
+        if (nread == 0) return 0;
+        uint32_t cp = wc;
+        if (wc >= 0xD800 && wc <= 0xDBFF) {
+            console_pending_high_surrogate = wc;
             continue;
         }
-
-        int cp = 0;
-        len = unicodeUTF8CharToCodePoint(buf + off, buf_len - off, &cp);
-
-        if (!unicodeIsCombiningChar(cp)) {
-            ret += unicodeIsWideChar(cp) ? 2 : 1;
-        }
-
-        off += len;
-    }
-
-    return ret;
-}
-
-/* Get column position for the multi line mode.
- */
-inline int unicodeColumnPosForMultiLine(char* buf, int buf_len, int pos, int cols, int ini_pos)
-{
-    int ret = 0;
-    int colwid = ini_pos;
-
-    int off = 0;
-    while (off < buf_len) {
-        int cp = 0;
-        int len = unicodeUTF8CharToCodePoint(buf + off, buf_len - off, &cp);
-
-        int wid = 0;
-        if (!unicodeIsCombiningChar(cp)) {
-            wid = unicodeIsWideChar(cp) ? 2 : 1;
-        }
-
-        int dif = (int)(colwid + wid) - (int)cols;
-        if (dif > 0) {
-            ret += dif;
-            colwid = wid;
-        } else if (dif == 0) {
-            colwid = 0;
+        if (wc >= 0xDC00 && wc <= 0xDFFF) {
+            if (!console_pending_high_surrogate) continue;
+            cp = 0x10000 +
+                 ((static_cast<uint32_t>(console_pending_high_surrogate) - 0xD800)
+                  << 10) +
+                 (static_cast<uint32_t>(wc) - 0xDC00);
+            console_pending_high_surrogate = 0;
         } else {
-            colwid += wid;
+            console_pending_high_surrogate = 0;
         }
-
-        if (off >= pos) {
-            break;
-        }
-
-        off += len;
-        ret += wid;
+        unicode::encode_utf8(console_in_queue, cp);
     }
-
-    return ret;
+    *c = console_in_queue[console_in_queue_pos++];
+    return 1;
 }
 
-/* Read UTF8 character from file.
- */
-inline int unicodeReadUTF8Char(int fd, char* buf, int* cp)
-{
-    int nread = read(fd,&buf[0],1);
-
-    if (nread <= 0) { return nread; }
-
-    unsigned char byte = buf[0];
-
-    if ((byte & 0x80) == 0) {
-        ;
-    } else if ((byte & 0xE0) == 0xC0) {
-        nread = read(fd,&buf[1],1);
-        if (nread <= 0) { return nread; }
-    } else if ((byte & 0xF0) == 0xE0) {
-        nread = read(fd,&buf[1],2);
-        if (nread <= 0) { return nread; }
-    } else if ((byte & 0xF8) == 0xF0) {
-        nread = read(fd,&buf[1],3);
-        if (nread <= 0) { return nread; }
-    } else {
+/* Write UTF-8 bytes. Console output goes through WriteConsoleW so it
+ * renders correctly regardless of the console code page; the engine always
+ * writes complete escape sequences and UTF-8 characters per call. */
+inline int write_bytes(int fd, const char *p, size_t n) {
+    HANDLE h;
+    if (!console_handle(fd, &h)) {
+        size_t off = 0;
+        while (off < n) {
+            int w = _write(fd, p + off, static_cast<unsigned>(n - off));
+            if (w <= 0) return -1;
+            off += static_cast<size_t>(w);
+        }
+        return static_cast<int>(n);
+    }
+    if (n == 0) return 0;
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, p, static_cast<int>(n), nullptr, 0);
+    if (wlen <= 0) return -1;
+    std::wstring w(static_cast<size_t>(wlen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, p, static_cast<int>(n), &w[0], wlen);
+    DWORD written = 0;
+    if (!WriteConsoleW(h, w.data(), static_cast<DWORD>(wlen), &written, nullptr))
         return -1;
-    }
-
-    return unicodeUTF8CharToCodePoint(buf, 4, cp);
+    return static_cast<int>(n);
 }
 
-/* ======================= Low level terminal handling ====================== */
+#else /* !_WIN32 */
 
-/* Return true if the terminal name is in the list of terminals we know are
- * not able to understand basic escape sequences. */
-inline bool isUnsupportedTerm(void) {
-    static const char *unsupported_term[] = {"dumb","cons25","emacs",NULL};
-#ifndef _WIN32
-    char *term = getenv("TERM");
-    int j;
+inline struct termios orig_termios; /* In order to restore at exit. */
 
-    if (term == NULL) return false;
+inline bool is_tty(int fd) { return ::isatty(fd) != 0; }
 
-    std::string sterm(term);
-    // https://stackoverflow.com/a/313990
-    std::transform(sterm.begin(), sterm.end(), sterm.begin(), [](unsigned char c){ return std::tolower(c); });
-    for (j = 0; unsupported_term[j]; j++) {
-        std::string uterm(unsupported_term[j]);
-        // https://stackoverflow.com/a/313990
-        std::transform(uterm.begin(), uterm.end(), uterm.begin(), [](unsigned char c){ return std::tolower(c); });
-        if (uterm == sterm)
-             return true;
+inline int read_byte(int fd, char *c) {
+    return static_cast<int>(::read(fd, c, 1));
+}
+
+inline int write_bytes(int fd, const char *p, size_t n) {
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = ::write(fd, p + off, n - off);
+        if (w <= 0) {
+            if (w == -1 && errno == EINTR) continue;
+            return -1;
+        }
+        off += static_cast<size_t>(w);
     }
-#endif
+    return static_cast<int>(n);
+}
+
+#endif /* _WIN32 */
+
+inline int write_str(int fd, const char *s) {
+    return write_bytes(fd, s, std::strlen(s));
+}
+
+inline void at_exit_handler();
+
+/* Return true if the terminal is known to be unable to understand basic
+ * escape sequences. On Windows this means the console refused virtual
+ * terminal mode (pre-Windows 10 consoles). */
+inline bool is_unsupported_term() {
+#ifdef _WIN32
+    HANDLE h;
+    DWORD mode;
+    if (!console_handle(STDOUT_FILENO, &h)) return false;
+    if (!GetConsoleMode(h, &mode)) return false;
+    if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) return false;
+    if (!SetConsoleMode(h, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) return true;
+    SetConsoleMode(h, mode);
     return false;
+#else
+    static const char *unsupported[] = {"dumb", "cons25", "emacs", nullptr};
+    const char *term = std::getenv("TERM");
+    if (term == nullptr) return false;
+    for (int j = 0; unsupported[j]; j++) {
+        if (!strcasecmp(term, unsupported[j])) return true;
+    }
+    return false;
+#endif
 }
 
-/* Raw mode: 1960 magic shit. */
-inline bool enableRawMode(int fd) {
-#ifndef _WIN32
-    struct termios raw;
+/* Put the terminal in raw mode. Returns 0 on success, -1 (errno=ENOTTY)
+ * on failure. */
+inline int enable_raw_mode(int fd) {
+    /* Test mode: when LINENOISE_ASSUME_TTY is set, skip terminal setup.
+     * This allows testing via pipes without a real terminal. */
+    if (assume_tty()) {
+        raw_mode = true;
+        return 0;
+    }
 
-    if (!isatty(STDIN_FILENO)) goto fatal;
+#ifdef _WIN32
+    HANDLE hin;
+    if (!console_handle(fd, &hin)) goto fatal;
     if (!atexit_registered) {
-        atexit(linenoiseAtExit);
+        std::atexit(at_exit_handler);
         atexit_registered = true;
     }
-    if (tcgetattr(fd,&orig_termios) == -1) goto fatal;
+    {
+        if (!GetConsoleMode(hin, &orig_console_in_mode)) goto fatal;
+        DWORD in_mode = orig_console_in_mode;
+        in_mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+        in_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+        if (!SetConsoleMode(hin, in_mode)) goto fatal;
 
-    raw = orig_termios;  /* modify the original mode */
+        HANDLE hout;
+        if (console_handle(raw_mode_ofd, &hout)) {
+            if (GetConsoleMode(hout, &orig_console_out_mode)) {
+                console_out_mode_saved = true;
+                DWORD out_mode = orig_console_out_mode |
+                                 ENABLE_VIRTUAL_TERMINAL_PROCESSING |
+                                 ENABLE_PROCESSED_OUTPUT;
+                if (!SetConsoleMode(hout, out_mode)) {
+                    SetConsoleMode(hin, orig_console_in_mode);
+                    goto fatal;
+                }
+            }
+        }
+    }
+    raw_mode = true;
+    raw_mode_ifd = fd;
+    /* Ask the terminal to wrap paste input between ESC[200~ and ESC[201~. */
+    write_str(raw_mode_ofd, "\x1b[?2004h");
+    return 0;
+#else
+    struct termios raw;
+
+    if (!is_tty(STDIN_FILENO)) goto fatal;
+    if (!atexit_registered) {
+        std::atexit(at_exit_handler);
+        atexit_registered = true;
+    }
+    if (tcgetattr(fd, &orig_termios) == -1) goto fatal;
+
+    raw = orig_termios; /* modify the original mode */
     /* input modes: no break, no CR to NL, no parity check, no strip char,
      * no start/stop output control. */
     raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
     /* output modes - disable post processing */
-    // NOTE: Multithreaded issue #20 (https://github.com/yhirose/cpp-linenoise/issues/20)
-    // raw.c_oflag &= ~(OPOST);
+    raw.c_oflag &= ~(OPOST);
     /* control modes - set 8 bit chars */
     raw.c_cflag |= (CS8);
     /* local modes - echoing off, canonical off, no extended functions,
@@ -1708,77 +1040,63 @@ inline bool enableRawMode(int fd) {
     raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
     /* control chars - set return condition: min number of bytes and timer.
      * We want read to return every single byte, without timeout. */
-    raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0; /* 1 byte, no timer */
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0; /* 1 byte, no timer */
 
     /* put terminal in raw mode after flushing */
-    if (tcsetattr(fd,TCSAFLUSH,&raw) < 0) goto fatal;
-    rawmode = true;
-#else
-    if (!atexit_registered) {
-        /* Cleanup them at exit */
-        atexit(linenoiseAtExit);
-        atexit_registered = true;
-
-        /* Init windows console handles only once */
-        hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-        if (hOut==INVALID_HANDLE_VALUE) goto fatal;
-    }
-
-    DWORD consolemodeOut;
-    if (!GetConsoleMode(hOut, &consolemodeOut)) {
-        CloseHandle(hOut);
-        errno = ENOTTY;
-        return false;
-    };
-
-    hIn = GetStdHandle(STD_INPUT_HANDLE);
-    if (hIn == INVALID_HANDLE_VALUE) {
-        CloseHandle(hOut);
-        errno = ENOTTY;
-        return false;
-    }
-
-    GetConsoleMode(hIn, &consolemodeIn);
-    /* Enable raw mode */
-    SetConsoleMode(hIn, consolemodeIn & ~ENABLE_PROCESSED_INPUT);
-
-    rawmode = true;
+    if (tcsetattr(fd, TCSAFLUSH, &raw) < 0) goto fatal;
+    raw_mode = true;
+    raw_mode_ifd = fd;
+    /* Ask the terminal to wrap paste input between ESC[200~ and ESC[201~. */
+    write_str(raw_mode_ofd, "\x1b[?2004h");
+    return 0;
 #endif
-    return true;
 
 fatal:
     errno = ENOTTY;
-    return false;
+    return -1;
 }
 
-inline void disableRawMode(int fd) {
-#ifdef _WIN32
-    if (consolemodeIn) {
-      SetConsoleMode(hIn, consolemodeIn);
-      consolemodeIn = 0;
+inline void disable_raw_mode(int fd) {
+    /* Test mode: nothing to restore. */
+    if (assume_tty()) {
+        raw_mode = false;
+        return;
     }
-    rawmode = false;
+#ifdef _WIN32
+    HANDLE hin;
+    if (raw_mode && console_handle(fd, &hin)) {
+        write_str(raw_mode_ofd, "\x1b[?2004l");
+        SetConsoleMode(hin, orig_console_in_mode);
+        HANDLE hout;
+        if (console_out_mode_saved && console_handle(raw_mode_ofd, &hout))
+            SetConsoleMode(hout, orig_console_out_mode);
+        raw_mode = false;
+    }
 #else
     /* Don't even check the return value as it's too late. */
-    if (rawmode && tcsetattr(fd,TCSAFLUSH,&orig_termios) != -1)
-        rawmode = false;
+    if (raw_mode && tcsetattr(fd, TCSAFLUSH, &orig_termios) != -1) {
+        /* Leave bracketed paste mode when leaving raw mode. */
+        write_str(raw_mode_ofd, "\x1b[?2004l");
+        raw_mode = false;
+    }
 #endif
 }
 
 /* Use the ESC [6n escape sequence to query the horizontal cursor position
  * and return it. On error -1 is returned, on success the position of the
  * cursor. */
-inline int getCursorPosition(int ifd, int ofd) {
+inline int get_cursor_position(int ifd, int ofd) {
     char buf[32];
     int cols, rows;
     unsigned int i = 0;
 
     /* Report cursor location */
-    if (write(ofd, "\x1b[6n", 4) != 4) return -1;
+    if (write_bytes(ofd, "\x1b[6n", 4) != 4) return -1;
 
     /* Read the response: ESC [ rows ; cols R */
-    while (i < sizeof(buf)-1) {
-        if (read(ifd,buf+i,1) != 1) break;
+    while (i < sizeof(buf) - 1) {
+        if (read_byte(ifd, buf + i) != 1) break;
         if (buf[i] == 'R') break;
         i++;
     }
@@ -1786,825 +1104,1358 @@ inline int getCursorPosition(int ifd, int ofd) {
 
     /* Parse it. */
     if (buf[0] != ESC || buf[1] != '[') return -1;
-    if (sscanf(buf+2,"%d;%d",&rows,&cols) != 2) return -1;
+    if (sscanf(buf + 2, "%d;%d", &rows, &cols) != 2) return -1;
     return cols;
 }
 
 /* Try to get the number of columns in the current terminal, or assume 80
  * if it fails. */
-inline int getColumns(int ifd, int ofd) {
-#ifdef _WIN32
-    CONSOLE_SCREEN_BUFFER_INFO b;
+inline size_t get_columns([[maybe_unused]] int ifd, int ofd) {
+    /* Test mode: use LINENOISE_COLS env var for fixed width. */
+    if (const char *cols_env = std::getenv("LINENOISE_COLS")) {
+        int v = std::atoi(cols_env);
+        if (v > 0) return static_cast<size_t>(v);
+    }
 
-    if (!GetConsoleScreenBufferInfo(hOut, &b)) return 80;
-    return b.srWindow.Right - b.srWindow.Left;
+#ifdef _WIN32
+    HANDLE hout;
+    if (console_handle(ofd, &hout)) {
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(hout, &info))
+            return static_cast<size_t>(info.srWindow.Right - info.srWindow.Left + 1);
+    }
+    return 80;
 #else
     struct winsize ws;
 
-    if (ioctl(1, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+    if (ioctl(ofd, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
         /* ioctl() failed. Try to query the terminal itself. */
         int start, cols;
 
         /* Get the initial position so we can restore it later. */
-        start = getCursorPosition(ifd,ofd);
-        if (start == -1) goto failed;
+        start = get_cursor_position(ifd, ofd);
+        if (start == -1) return 80;
 
         /* Go to right margin and get position. */
-        if (write(ofd,"\x1b[999C",6) != 6) goto failed;
-        cols = getCursorPosition(ifd,ofd);
-        if (cols == -1) goto failed;
+        if (write_bytes(ofd, "\x1b[999C", 6) != 6) return 80;
+        cols = get_cursor_position(ifd, ofd);
+        if (cols == -1) return 80;
 
         /* Restore position. */
         if (cols > start) {
             char seq[32];
-            snprintf(seq,32,"\x1b[%dD",cols-start);
-            if (write(ofd,seq,strlen(seq)) == -1) {
-                /* Can't recover... */
-            }
+            snprintf(seq, 32, "\x1b[%dD", cols - start);
+            write_str(ofd, seq);
         }
-        return cols;
-    } else {
-        return ws.ws_col;
+        return static_cast<size_t>(cols);
     }
-
-failed:
-    return 80;
+    return ws.ws_col;
 #endif
 }
 
-/* Clear the screen. Used to handle ctrl+l */
-inline void linenoiseClearScreen(void) {
-    if (write(STDOUT_FILENO,"\x1b[H\x1b[2J",7) <= 0) {
-        /* nothing to do, just to avoid warning. */
-    }
-}
-
-/* Temporarily clear the line from the screen,
- * without resetting its state.  Used for
- * temporarily clearing prompt and input while
- * printing other content. */
-inline void linenoiseWipeLine() {
-    // Clear line
-    if (write(STDOUT_FILENO, "\33[2K", 4) < 0) {
-        /* nothing to do, just to avoid warning. */
-    }
-    // Move cursor to the left
-    if (write(STDOUT_FILENO, "\r", 1) < 0) {
-        /* nothing to do, just to avoid warning. */
-    }
+/* Clear the screen. Used to handle ctrl+l. */
+inline void clear_screen() {
+    write_bytes(STDOUT_FILENO, "\x1b[H\x1b[2J", 7);
 }
 
 /* Beep, used for completion when there is nothing to complete or when all
  * the choices were already shown. */
-inline void linenoiseBeep(void) {
+inline void beep() {
     fprintf(stderr, "\x7");
     fflush(stderr);
 }
 
-/* ============================== Completion ================================ */
+/* ============================== History =================================== */
 
-/* This is an helper function for Edit() and is called when the
- * user types the <tab> key in order to complete the string currently in the
- * input.
- *
- * The state of the editing is encapsulated into the pointed linenoiseState
- * structure as described in the structure definition. */
-inline int linenoiseState::completeLine(char *cbuf, int *c) {
-    std::vector<std::string> lc;
-    int nread = 0, nwritten;
-    *c = 0;
+/* Add a new entry to the history. Returns true if the line was added. */
+inline bool history_add(const char *line) {
+    if (history_max_len == 0) return false;
 
-    completionCallback(buf_,lc);
-    if (lc.empty()) {
-        linenoiseBeep();
-    } else {
-        int stop = 0, i = 0;
+    /* Don't add duplicated lines. */
+    if (!history.empty() && history.back() == line) return false;
 
-        while(!stop) {
-            /* Show completion or original buffer */
-            if (i < static_cast<int>(lc.size())) {
-                int old_len = len_;
-                int old_pos = pos_;
-                char *old_buf = buf_;
-                len_ = pos_ = static_cast<int>(lc[i].size());
-                buf_ = &lc[i][0];
-                RefreshLine();
-                len_ = old_len;
-                pos_ = old_pos;
-                buf_ = old_buf;
-	    } else {
-                RefreshLine();
-            }
-
-            //nread = read(ifd_,&c,1);
-#ifdef _WIN32
-            nread = win32read(c);
-            if (nread == 1) {
-                cbuf[0] = *c;
-            }
-#else
-            nread = unicodeReadUTF8Char(ifd_,cbuf,c);
-#endif
-            if (nread <= 0) {
-                *c = -1;
-                return nread;
-            }
-
-            switch(*c) {
-                case 9: /* tab */
-                    i = (i+1) % (lc.size()+1);
-                    if (i == static_cast<int>(lc.size())) linenoiseBeep();
-                    break;
-                case 27: /* escape */
-                    /* Re-show original buffer */
-                    if (i < static_cast<int>(lc.size())) RefreshLine();
-                    stop = 1;
-                    break;
-                default:
-                    /* Update buffer and return */
-                    if (i < static_cast<int>(lc.size())) {
-                        nwritten = snprintf(buf_,buf_len_,"%s",&lc[i][0]);
-                        len_ = pos_ = nwritten;
-                    }
-                    stop = 1;
-                    break;
-            }
-        }
-    }
-
-    return nread;
+    /* If we reached the max length, remove the older line. */
+    if (history.size() == history_max_len) history.erase(history.begin());
+    history.emplace_back(line);
+    return true;
 }
 
-/* =========================== Line editing ================================= */
+inline bool history_set_max_len(size_t len) {
+    if (len < 1) return false;
+    if (history.size() > len)
+        history.erase(history.begin(), history.end() - len);
+    history_max_len = len;
+    return true;
+}
+
+/* Save the history in the specified file. Returns true on success. */
+inline bool history_save(const char *filename) {
+#ifndef _WIN32
+    mode_t old_umask = umask(S_IXUSR | S_IRWXG | S_IRWXO);
+#endif
+    std::ofstream f(filename, std::ios::binary);
+#ifndef _WIN32
+    umask(old_umask);
+    if (f) ::chmod(filename, S_IRUSR | S_IWUSR);
+#endif
+    if (!f) return false;
+    for (const auto &entry : history) {
+        /* Keep the history file newline-separated: embedded newlines in an
+         * entry are stored as CR and converted back by history_load(). */
+        std::string s = entry;
+        std::replace(s.begin(), s.end(), '\n', '\r');
+        f << s << '\n';
+    }
+    return f.good();
+}
+
+/* Load the history from the specified file. Returns true on success. */
+inline bool history_load(const char *filename) {
+    std::ifstream f(filename, std::ios::binary);
+    if (!f) return false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        /* Rebuild embedded newlines that were saved as CR. */
+        std::replace(line.begin(), line.end(), '\r', '\n');
+        history_add(line.c_str());
+    }
+    return true;
+}
+
+/* At exit we'll try to fix the terminal to the initial conditions. */
+inline void at_exit_handler() { disable_raw_mode(raw_mode_ifd); }
+
+/* =========================== Refresh / folds ============================== */
+
+inline constexpr int kRefreshClean = 1 << 0; /* Clean the old prompt. */
+inline constexpr int kRefreshWrite = 1 << 1; /* Rewrite the prompt. */
+inline constexpr int kRefreshAll = kRefreshClean | kRefreshWrite;
+
+inline void refresh_line(State &l);
+inline void refresh_line_with_flags(State &l, int flags);
+
+/* A fold is a display-only replacement for a byte range in l.buf. The
+ * edited buffer always keeps the real bytes; refresh code asks
+ * render_buffer() for a temporary printable version plus the cursor
+ * position inside it. */
+struct RenderFold {
+    size_t start;
+    size_t end;
+    std::string display;
+};
+
+/* Return the number of logical lines in the range. */
+inline size_t fold_count_lines(const char *buf, size_t len) {
+    size_t lines = 1;
+    for (size_t j = 0; j < len; j++)
+        if (buf[j] == '\n') lines++;
+    return lines;
+}
+
+/* Return true if the text should be folded: if it contains newlines or is
+ * at least kPasteFoldThreshold bytes long. */
+inline bool should_fold_text(const char *buf, size_t len) {
+    return memchr(buf, '\n', len) != nullptr || len >= kPasteFoldThreshold;
+}
+
+/* Fill f.display with the text shown instead of the folded range. */
+inline void fold_set_rendered_text(RenderFold &f, const std::string &buf) {
+    size_t hidden = f.end - f.start;
+    size_t lines = fold_count_lines(buf.data() + f.start, hidden);
+    char display[64];
+    if (lines > 1)
+        snprintf(display, sizeof(display), "[... %zu pasted lines ...]", lines);
+    else
+        snprintf(display, sizeof(display), "[... %zu pasted chars ...]", hidden);
+    f.display = display;
+}
+
+/* Populate f with one fold reconstructed from a history entry. History
+ * stores the real text, but not the original paste boundaries, so we
+ * reconstruct an approximation: fold if it is long or contains newlines,
+ * keeping a few characters of context at both ends. */
+inline bool build_history_fold(State &l, RenderFold &f) {
+    f.start = f.end = 0;
+    f.display.clear();
+    if (l.buf.empty() || mask_mode) return false;
+    if (!should_fold_text(l.buf.data(), l.buf.size())) return false;
+
+    f.start = 0;
+    f.end = l.buf.size();
+    if (l.buf.size() > kPasteFoldContext * 2) {
+        size_t pos = 0, chars = 0;
+        bool nl = false;
+
+        /* We leave (if possible) a few chars on the start before the fold,
+         * to give context. */
+        while (pos < l.buf.size() && chars < kPasteFoldContext) {
+            size_t step = unicode::next_grapheme_len(l.buf.data(), pos, l.buf.size());
+            if (step == 0 || pos + step > l.buf.size()) break;
+            if (l.buf[pos] == '\n') nl = true;
+            pos += step;
+            chars++;
+        }
+        f.start = nl ? 0 : pos;
+
+        /* And also on the end side. */
+        pos = l.buf.size();
+        chars = 0;
+        nl = false;
+        while (pos > 0 && chars < kPasteFoldContext) {
+            size_t step = unicode::prev_grapheme_len(l.buf.data(), pos);
+            if (step == 0 || step > pos) break;
+            pos -= step;
+            if (l.buf[pos] == '\n') nl = true;
+            chars++;
+        }
+        f.end = nl ? l.buf.size() : pos;
+        if (f.start >= f.end) {
+            f.start = 0;
+            f.end = l.buf.size();
+        }
+    }
+    fold_set_rendered_text(f, l.buf);
+    return true;
+}
+
+/* Populate fs with the folds to render for the current buffer. Return true
+ * if folding should be used, false if the buffer renders as-is. */
+inline bool get_render_folds(State &l, std::vector<RenderFold> &fs) {
+    fs.clear();
+    if (l.buf.empty() || mask_mode) return false;
+
+    for (const auto &range : l.folds) {
+        if (range.first >= range.second || range.second > l.buf.size()) continue;
+        RenderFold f;
+        f.start = range.first;
+        f.end = range.second;
+        fold_set_rendered_text(f, l.buf);
+        fs.push_back(std::move(f));
+    }
+    return !fs.empty();
+}
+
+/* Build the string actually displayed in the user prompt: the edited line,
+ * or a version where pasted/multiline ranges are replaced by their folded
+ * "[...]" markers. outpos is l.pos translated into the rendered buffer. */
+inline void render_buffer(State &l, std::string &out, size_t &outpos) {
+    std::vector<RenderFold> fs;
+    if (!get_render_folds(l, fs)) {
+        out = l.buf;
+        outpos = l.pos;
+        return;
+    }
+
+    /* Gaps are copied as-is, folded ranges are replaced by their markers.
+     * The bytes inside each [start,end) range stay in l.buf but are not
+     * emitted to the terminal. */
+    out.clear();
+    size_t src = 0;
+    bool pos_set = false;
+    outpos = 0;
+    for (const auto &f : fs) {
+        if (!pos_set && l.pos <= f.start) {
+            outpos = out.size() + (l.pos - src);
+            pos_set = true;
+        }
+        out.append(l.buf, src, f.start - src);
+
+        if (!pos_set && l.pos < f.end) {
+            outpos = out.size() + f.display.size();
+            pos_set = true;
+        }
+        out += f.display;
+        if (!pos_set && l.pos == f.end) {
+            outpos = out.size();
+            pos_set = true;
+        }
+        src = f.end;
+    }
+    if (!pos_set) outpos = out.size() + (l.pos - src);
+    out.append(l.buf, src, l.buf.size() - src);
+}
+
+/* Return the number of bytes to move right from pos. If pos is at the
+ * start of a folded range, the whole hidden range is skipped by one cursor
+ * movement. */
+inline size_t edit_next_len(State &l, size_t pos) {
+    std::vector<RenderFold> fs;
+    if (get_render_folds(l, fs)) {
+        for (const auto &f : fs)
+            if (pos == f.start) return f.end - f.start;
+    }
+    return unicode::next_grapheme_len(l.buf.data(), pos, l.buf.size());
+}
+
+/* Return the number of bytes to move left from pos. If pos is at the end
+ * of a folded range, the whole hidden range is skipped by one cursor
+ * movement. */
+inline size_t edit_prev_len(State &l, size_t pos) {
+    std::vector<RenderFold> fs;
+    if (get_render_folds(l, fs)) {
+        for (const auto &f : fs)
+            if (pos == f.end) return f.end - f.start;
+    }
+    return unicode::prev_grapheme_len(l.buf.data(), pos);
+}
+
+/* Add a fold range, keeping the array sorted by start offset. */
+inline void fold_add(State &l, size_t start, size_t end) {
+    if (start >= end || l.folds.size() == kMaxFolds) return;
+    auto it = std::upper_bound(
+        l.folds.begin(), l.folds.end(), start,
+        [](size_t v, const std::pair<size_t, size_t> &f) { return v < f.first; });
+    l.folds.insert(it, {start, end});
+}
+
+/* Clear all remembered fold ranges. */
+inline void fold_clear(State &l) { l.folds.clear(); }
+
+/* Return true if [pos,pos+len) overlaps any folded range. */
+inline bool range_overlaps_fold(State &l, size_t pos, size_t len) {
+    size_t end = pos + len;
+    for (const auto &f : l.folds)
+        if (end > f.first && pos < f.second) return true;
+    return false;
+}
+
+/* Adjust fold ranges after an insertion. If insertion lands inside a fold,
+ * remove that fold because it no longer maps to an unchanged range. */
+inline void adjust_folds_after_insert(State &l, size_t pos, size_t len) {
+    for (auto it = l.folds.begin(); it != l.folds.end();) {
+        if (pos <= it->first) {
+            it->first += len;
+            it->second += len;
+            ++it;
+        } else if (pos < it->second) {
+            it = l.folds.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+/* Adjust fold ranges after a deletion. If deletion overlaps a fold, remove
+ * that fold because it no longer maps to an unchanged range. */
+inline void adjust_folds_after_delete(State &l, size_t pos, size_t len) {
+    size_t end = pos + len;
+    for (auto it = l.folds.begin(); it != l.folds.end();) {
+        if (end <= it->first) {
+            it->first -= len;
+            it->second -= len;
+            ++it;
+        } else if (pos >= it->second) {
+            ++it;
+        } else {
+            it = l.folds.erase(it);
+        }
+    }
+}
+
+/* Helper of refresh_single_line() and refresh_multi_line() to show hints
+ * to the right of the prompt. */
+inline void refresh_show_hints(std::string &ab, State &l, size_t pwidth,
+                               size_t bufwidth) {
+    if (!hints_callback) return;
+    if (pwidth + bufwidth >= l.cols) return;
+    int color = -1;
+    bool bold = false;
+    std::string hint = hints_callback(l.buf.c_str(), color, bold);
+    if (hint.empty()) return;
+
+    size_t hintlen = hint.size();
+    size_t hintwidth = unicode::str_width(hint.data(), hintlen);
+    size_t hintmaxwidth = l.cols - (pwidth + bufwidth);
+    /* Truncate hint to fit, respecting grapheme cluster boundaries. */
+    if (hintwidth > hintmaxwidth) {
+        size_t i = 0, w = 0;
+        while (i < hintlen) {
+            size_t clen = unicode::next_grapheme_len(hint.data(), i, hintlen);
+            if (clen == 0) break;
+            int cwidth = unicode::single_grapheme_width(hint.data() + i, clen);
+            if (w + cwidth > hintmaxwidth) break;
+            w += cwidth;
+            i += clen;
+        }
+        hintlen = i;
+    }
+    if (bold && color == -1) color = 37;
+    char seq[64];
+    if (color != -1 || bold)
+        snprintf(seq, 64, "\033[%d;%d;49m", bold ? 1 : 0, color);
+    else
+        seq[0] = '\0';
+    ab += seq;
+    ab.append(hint, 0, hintlen);
+    if (color != -1 || bold) ab += "\033[0m";
+}
 
 /* Single line low level line refresh.
  *
  * Rewrite the currently edited line accordingly to the buffer content,
- * cursor position, and number of columns of the terminal. */
-inline void linenoiseState::refreshSingleLine() {
-    char seq[64];
-    int pcolwid = unicodeColumnPos(prompt_.c_str(), static_cast<int>(prompt_.length()));
-    int fd = ofd_;
+ * cursor position, and number of columns of the terminal. Uses display
+ * widths (not byte counts) for cursor positioning and horizontal
+ * scrolling. */
+inline void refresh_single_line(State &l, int flags) {
+    size_t pwidth = unicode::str_width(l.prompt.data(), l.prompt.size());
+    int fd = l.ofd;
+    std::string render;
+    size_t pos;
+    render_buffer(l, render, pos);
+    const char *buf = render.data();
+    size_t len = render.size();
+
+    /* Calculate the display width up to cursor and total display width. */
+    size_t poscol = unicode::str_width(buf, pos);
+    size_t lencol = unicode::str_width(buf, len);
+    size_t fullwidth = lencol;
+
+    /* Scroll the buffer horizontally if cursor is past the right edge:
+     * trim whole grapheme clusters from the left until the cursor fits. */
+    while (len > 0 && pwidth + poscol >= l.cols) {
+        size_t clen = unicode::next_grapheme_len(buf, 0, len);
+        if (clen == 0 || clen > pos) break;
+        int cwidth = unicode::single_grapheme_width(buf, clen);
+        buf += clen;
+        len -= clen;
+        pos -= clen;
+        poscol -= cwidth;
+        lencol -= cwidth;
+    }
+
+    /* Trim from the right if the line still doesn't fit. */
+    while (len > 0 && pwidth + lencol > l.cols) {
+        size_t clen = unicode::prev_grapheme_len(buf, len);
+        if (clen == 0) break;
+        int cwidth = unicode::single_grapheme_width(buf + len - clen, clen);
+        len -= clen;
+        lencol -= cwidth;
+    }
+
     std::string ab;
-
-    if (cols_ <= 0)
-       cols_ = getColumns(ifd_, ofd_);
-
-    while((pcolwid+unicodeColumnPos(buf_, pos_)) >= cols_) {
-        int glen = unicodeGraphemeLen(buf_, len_, 0);
-        buf_ += glen;
-        len_ -= glen;
-        pos_ -= glen;
-    }
-    while (pcolwid+unicodeColumnPos(buf_, len_) > cols_) {
-        len_ -= unicodePrevGraphemeLen(buf_, len_);
-    }
-
     /* Cursor to left edge */
-    snprintf(seq,64,"\r");
-    ab += seq;
-    /* Write the prompt and the current buffer content */
-    ab += prompt_;
-    ab.append(buf_, len_);
+    ab += '\r';
+
+    if (flags & kRefreshWrite) {
+        /* Write the prompt and the current buffer content */
+        ab += l.prompt;
+        if (mask_mode) {
+            /* In mask mode, output one '*' per grapheme cluster. */
+            size_t i = 0;
+            while (i < len) {
+                ab += '*';
+                size_t step = unicode::next_grapheme_len(buf, i, len);
+                if (step == 0) break;
+                i += step;
+            }
+        } else {
+            ab.append(buf, len);
+        }
+        /* Show hints if any. */
+        refresh_show_hints(ab, l, pwidth, fullwidth);
+    }
+
     /* Erase to right */
-    snprintf(seq,64,"\x1b[0K");
-    ab += seq;
-    /* Move cursor to original position. */
-    snprintf(seq,64,"\r\x1b[%dC", (int)(unicodeColumnPos(buf_, pos_)+pcolwid));
-    ab += seq;
-    if (write(fd,ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
+    ab += "\x1b[0K";
+
+    if (flags & kRefreshWrite) {
+        /* Move cursor to original position (display column, not byte). */
+        char seq[64];
+        snprintf(seq, sizeof(seq), "\r\x1b[%dC", static_cast<int>(poscol + pwidth));
+        ab += seq;
+    }
+
+    write_bytes(fd, ab.data(), ab.size()); /* Can't recover from write error. */
 }
 
 /* Multi line low level line refresh.
  *
  * Rewrite the currently edited line accordingly to the buffer content,
- * cursor position, and number of columns of the terminal. */
-inline void linenoiseState::refreshMultiLine() {
-    if (cols_ <= 0)
-       cols_ = getColumns(ifd_, ofd_);
-
+ * cursor position, and number of columns of the terminal. Uses display
+ * widths for positioning. */
+inline void refresh_multi_line(State &l, int flags) {
     char seq[64];
-    int pcolwid = unicodeColumnPos(prompt_.c_str(), static_cast<int>(prompt_.length()));
-    int colpos = unicodeColumnPosForMultiLine(buf_, len_, len_, cols_, pcolwid);
-    int colpos2; /* cursor column position. */
-    int rows = (pcolwid+colpos+cols_-1)/cols_; /* rows used by current buf. */
-    int rpos = (pcolwid+oldcolpos_+cols_)/cols_; /* cursor relative row. */
-    int rpos2; /* rpos after refresh. */
-    int col; /* column position, zero-based. */
-    int old_rows = (int)maxrows_;
-    int fd = ofd_;
+    size_t pwidth = unicode::str_width(l.prompt.data(), l.prompt.size());
+    std::string render;
+    size_t render_pos;
+    render_buffer(l, render, render_pos);
+    size_t bufwidth = unicode::str_width(render.data(), render.size());
+    size_t poswidth = unicode::str_width(render.data(), render_pos);
+    int rows = static_cast<int>((pwidth + bufwidth + l.cols - 1) / l.cols);
+    int rpos = l.oldrpos; /* Cursor relative row from previous refresh. */
+    int rpos2;            /* rpos after refresh. */
+    int col;              /* Column position, zero-based. */
+    int old_rows = static_cast<int>(l.oldrows);
+    int fd = l.ofd;
+    l.oldrows = static_cast<size_t>(rows);
+
+    /* First step: clear all the lines used before, starting from the
+     * last row. */
     std::string ab;
 
-    /* Update maxrows if needed. */
-    if (rows > (int)maxrows_) maxrows_ = rows;
+    if (flags & kRefreshClean) {
+        if (old_rows - rpos > 0) {
+            snprintf(seq, 64, "\x1b[%dB", old_rows - rpos);
+            ab += seq;
+        }
 
-    /* First step: clear all the lines used before. To do so start by
-     * going to the last row. */
-    if (old_rows-rpos > 0) {
-        snprintf(seq,64,"\x1b[%dB", old_rows-rpos);
-        ab += seq;
+        /* Now for every row clear it, go up. */
+        for (int j = 0; j < old_rows - 1; j++) ab += "\r\x1b[0K\x1b[1A";
     }
 
-    /* Now for every row clear it, go up. */
-    for (int j = 0; j < old_rows-1; j++) {
-        snprintf(seq,64,"\r\x1b[0K\x1b[1A");
-        ab += seq;
+    if (flags & kRefreshAll) {
+        /* Clean the top line. */
+        ab += "\r\x1b[0K";
     }
 
-    /* Clean the top line. */
-    snprintf(seq,64,"\r\x1b[0K");
-    ab += seq;
-
-    /* Write the prompt and the current buffer content */
-    ab += prompt_;
-    ab.append(buf_, len_);
-
-    /* Get text width to cursor position */
-    colpos2 = unicodeColumnPosForMultiLine(buf_, len_, pos_, cols_, pcolwid);
-
-    /* If we are at the very end of the screen with our prompt, we need to
-     * emit a newline and move the prompt to the first column. */
-    if (pos_ &&
-        pos_ == len_ &&
-        (colpos2+pcolwid) % cols_ == 0)
-    {
-        ab += "\n";
-        snprintf(seq,64,"\r");
-        ab += seq;
-        rows++;
-        if (rows > (int)maxrows_) maxrows_ = rows;
-    }
-
-    /* Move cursor to right position. */
-    rpos2 = (pcolwid+colpos2+cols_)/cols_; /* current cursor relative row. */
-
-    /* Go up till we reach the expected position. */
-    if (rows-rpos2 > 0) {
-        snprintf(seq,64,"\x1b[%dA", rows-rpos2);
-        ab += seq;
-    }
-
-    /* Set column. */
-    col = (pcolwid + colpos2) % cols_;
-    if (col)
-        snprintf(seq,64,"\r\x1b[%dC", col);
-    else
-        snprintf(seq,64,"\r");
-    ab += seq;
-
-    oldcolpos_ = colpos2;
-
-    if (write(fd,ab.c_str(), static_cast<int>(ab.length())) == -1) {} /* Can't recover from write error. */
-}
-
-/* Calls the two low level functions refreshSingleLine() or
- * refreshMultiLine() according to the selected mode. */
-inline void linenoiseState::RefreshLine() {
-    mutex_.lock();
-    if (mlmode_)
-        refreshMultiLine();
-    else
-        refreshSingleLine();
-    mutex_.unlock();
-}
-
-inline void linenoiseState::WipeLine() { linenoiseWipeLine(); }
-
-inline void linenoiseState::ClearScreen() { linenoiseClearScreen(); }
-
-inline void linenoiseState::SetPrompt(const char *p) { prompt_ = std::string(p); }
-inline void linenoiseState::SetPrompt(std::string &p) { prompt_ = p; }
-
-/* Insert the character 'c' at cursor current position.
- *
- * On error writing to the terminal -1 is returned, otherwise 0. */
-inline int linenoiseState::EditInsert(const char* cbuf, int clen) {
-    if (len_ < buf_len_) {
-        if (len_ == pos_) {
-            memcpy(&buf_[pos_],cbuf,clen);
-            pos_+=clen;
-            len_+=clen;;
-            buf_[len_] = '\0';
-            if ((!mlmode_ && unicodeColumnPos(prompt_.c_str(), static_cast<int>(prompt_.length()))+unicodeColumnPos(buf_,len_) < cols_) /* || mlmode_ */) {
-                /* Avoid a full update of the line in the
-                 * trivial case. */
-                if (write(ofd_,cbuf,clen) == -1) return -1;
-            } else {
-                RefreshLine();
+    if (flags & kRefreshWrite) {
+        /* Write the prompt and the current buffer content */
+        ab += l.prompt;
+        if (mask_mode) {
+            /* In mask mode, output one '*' per grapheme cluster. */
+            size_t i = 0;
+            while (i < render.size()) {
+                ab += '*';
+                size_t step =
+                    unicode::next_grapheme_len(render.data(), i, render.size());
+                if (step == 0) break;
+                i += step;
             }
         } else {
-            memmove(buf_+pos_+clen,buf_+pos_,len_-pos_);
-            memcpy(&buf_[pos_],cbuf,clen);
-            pos_+=clen;
-            len_+=clen;
-            buf_[len_] = '\0';
-            RefreshLine();
+            ab += render;
+        }
+
+        /* Show hints if any. */
+        refresh_show_hints(ab, l, pwidth, bufwidth);
+
+        /* If we are at the very end of the screen with our prompt, we need
+         * to emit a newline and move the prompt to the first column. */
+        if (l.pos && render_pos == render.size() &&
+            (poswidth + pwidth) % l.cols == 0) {
+            ab += '\n';
+            ab += '\r';
+            rows++;
+            if (rows > static_cast<int>(l.oldrows))
+                l.oldrows = static_cast<size_t>(rows);
+        }
+
+        /* Move cursor to right position. */
+        rpos2 = static_cast<int>((pwidth + poswidth + l.cols) / l.cols);
+
+        /* Go up till we reach the expected position. */
+        if (rows - rpos2 > 0) {
+            snprintf(seq, 64, "\x1b[%dA", rows - rpos2);
+            ab += seq;
+        }
+
+        /* Set column. */
+        col = static_cast<int>((pwidth + poswidth) % l.cols);
+        if (col) {
+            snprintf(seq, 64, "\r\x1b[%dC", col);
+            ab += seq;
+        } else {
+            ab += '\r';
+        }
+
+        l.oldrpos = rpos2;
+    }
+
+    l.oldpos = l.pos;
+
+    write_bytes(fd, ab.data(), ab.size()); /* Can't recover from write error. */
+}
+
+/* Calls the two low level functions refresh_single_line() or
+ * refresh_multi_line() according to the selected mode. */
+inline void refresh_line_with_flags(State &l, int flags) {
+    if (ml_mode)
+        refresh_multi_line(l, flags);
+    else
+        refresh_single_line(l, flags);
+}
+
+/* Utility function to avoid specifying kRefreshAll all the times. */
+inline void refresh_line(State &l) { refresh_line_with_flags(l, kRefreshAll); }
+
+/* ============================== Completion ================================ */
+
+/* Called by complete_line() and Show() to render the current edited line
+ * with the proposed completion. If the current completion table is already
+ * available, it is passed as second argument, otherwise the callback is
+ * used to obtain it. */
+inline void refresh_line_with_completion(State &ls,
+                                         const std::vector<std::string> *lc,
+                                         int flags) {
+    /* Obtain the table of completions if the caller didn't provide one. */
+    std::vector<std::string> ctable;
+    if (lc == nullptr) {
+        completion_callback(ls.buf.c_str(), ctable);
+        lc = &ctable;
+    }
+
+    /* Show the edited line with completion if possible, or just refresh. */
+    if (ls.completion_idx < lc->size()) {
+        std::string saved_buf = std::move(ls.buf);
+        size_t saved_pos = ls.pos;
+        auto saved_folds = std::move(ls.folds);
+        ls.buf = (*lc)[ls.completion_idx];
+        ls.pos = ls.buf.size();
+        ls.folds.clear();
+        refresh_line_with_flags(ls, flags);
+        ls.buf = std::move(saved_buf);
+        ls.pos = saved_pos;
+        ls.folds = std::move(saved_folds);
+    } else {
+        refresh_line_with_flags(ls, flags);
+    }
+}
+
+/* This is a helper function for edit_feed() and is called when the user
+ * types the <tab> key in order to complete the string currently in the
+ * input.
+ *
+ * If the function returns non-zero, the caller should handle the returned
+ * value as a byte read from the standard input, and process it as usual:
+ * the function may return a byte read from the terminal but not processed.
+ * Otherwise, if zero is returned, the input was consumed by the
+ * complete_line() function to navigate the possible completions, and the
+ * caller should read the next character from stdin. */
+inline int complete_line(State &ls, int keypressed) {
+    std::vector<std::string> lc;
+    int c = keypressed;
+
+    completion_callback(ls.buf.c_str(), lc);
+    if (lc.empty()) {
+        beep();
+        ls.in_completion = false;
+        c = 0;
+    } else {
+        switch (c) {
+        case TAB: /* tab */
+            if (!ls.in_completion) {
+                ls.in_completion = true;
+                ls.completion_idx = 0;
+            } else {
+                ls.completion_idx = (ls.completion_idx + 1) % (lc.size() + 1);
+                if (ls.completion_idx == lc.size()) beep();
+            }
+            c = 0;
+            break;
+        case ESC: /* escape */
+            /* Re-show original buffer */
+            if (ls.completion_idx < lc.size()) refresh_line(ls);
+            ls.in_completion = false;
+            c = 0;
+            break;
+        default:
+            /* Update buffer and return */
+            if (ls.completion_idx < lc.size()) {
+                ls.buf = lc[ls.completion_idx];
+                if (ls.buf.size() > kMaxLine) ls.buf.resize(kMaxLine);
+                ls.pos = ls.buf.size();
+                fold_clear(ls);
+            }
+            ls.in_completion = false;
+            break;
+        }
+
+        /* Show completion or original buffer */
+        if (ls.in_completion && ls.completion_idx < lc.size()) {
+            refresh_line_with_completion(ls, &lc, kRefreshAll);
+        } else {
+            refresh_line(ls);
         }
     }
-    return 0;
+
+    return c; /* Return last read character */
 }
 
-/* Move cursor on the left. */
-inline void linenoiseState::EditMoveLeft() {
-    if (pos_ > 0) {
-        pos_ -= unicodePrevGraphemeLen(buf_, pos_);
-        RefreshLine();
+/* ============================= Line editing =============================== */
+
+/* Insert bytes into l.buf without repainting the prompt. The paste path
+ * uses this to first store the real pasted bytes, then mark their range as
+ * folded, and only then refresh, so raw pasted newlines are never printed
+ * directly. Returns false when the buffer would exceed kMaxLine. */
+inline bool edit_insert_no_refresh(State &l, const char *c, size_t clen) {
+    if (clen > kMaxLine || l.buf.size() > kMaxLine - clen) return false;
+    size_t insert_pos = l.pos;
+    l.buf.insert(l.pos, c, clen);
+    l.pos += clen;
+    adjust_folds_after_insert(l, insert_pos, clen);
+    return true;
+}
+
+/* Insert the character(s) 'c' of length 'clen' at cursor current position.
+ * Handles both single-byte ASCII and multi-byte UTF-8 sequences. */
+inline void edit_insert(State &l, const char *c, size_t clen) {
+    if (l.buf.size() == l.pos) {
+        bool needs_refresh = memchr(c, '\n', clen) != nullptr ||
+                             memchr(c, '\r', clen) != nullptr;
+
+        if (!edit_insert_no_refresh(l, c, clen)) return;
+        if (!needs_refresh && !ml_mode && !hints_callback &&
+            (mask_mode || l.folds.empty())) {
+            size_t bufwidth = unicode::str_width(l.buf.data(), l.buf.size());
+            if (unicode::str_width(l.prompt.data(), l.prompt.size()) + bufwidth <
+                l.cols) {
+                /* Avoid a full update of the line in the trivial case:
+                 * appending in a line that fits the terminal width. */
+                if (mask_mode) {
+                    write_bytes(l.ofd, "*", 1);
+                } else {
+                    write_bytes(l.ofd, c, clen);
+                }
+                return;
+            }
+        }
+        refresh_line(l);
+    } else {
+        if (!edit_insert_no_refresh(l, c, clen)) return;
+        refresh_line(l);
     }
 }
 
-/* Move cursor on the right. */
-inline void linenoiseState::EditMoveRight() {
-    if (pos_ != len_) {
-        pos_ += unicodeGraphemeLen(buf_, len_, pos_);
-        RefreshLine();
+/* Move cursor on the left, by one grapheme cluster. */
+inline void edit_move_left(State &l) {
+    if (l.pos > 0) {
+        l.pos -= edit_prev_len(l, l.pos);
+        refresh_line(l);
+    }
+}
+
+/* Move cursor on the right, by one grapheme cluster. */
+inline void edit_move_right(State &l) {
+    if (l.pos != l.buf.size()) {
+        l.pos += edit_next_len(l, l.pos);
+        refresh_line(l);
     }
 }
 
 /* Move cursor to the start of the line. */
-inline void linenoiseState::EditMoveHome() {
-    if (pos_ != 0) {
-        pos_ = 0;
-        RefreshLine();
+inline void edit_move_home(State &l) {
+    if (l.pos != 0) {
+        l.pos = 0;
+        refresh_line(l);
     }
 }
 
 /* Move cursor to the end of the line. */
-inline void linenoiseState::EditMoveEnd() {
-    if (pos_ != len_) {
-        pos_ = len_;
-        RefreshLine();
+inline void edit_move_end(State &l) {
+    if (l.pos != l.buf.size()) {
+        l.pos = l.buf.size();
+        refresh_line(l);
     }
 }
 
 /* Substitute the currently edited line with the next or previous history
  * entry as specified by 'dir'. */
-#define LINENOISE_HISTORY_NEXT 0
-#define LINENOISE_HISTORY_PREV 1
-inline void linenoiseState::EditHistoryNext(int dir) {
-      if (history_.size() > 1) {
-        /* Update the current history entry before to
-         * overwrite it with the next one. */
-        history_[history_.size() - 1 - history_index_] = buf_;
+inline constexpr int kHistoryNext = 0;
+inline constexpr int kHistoryPrev = 1;
+inline void edit_history_next(State &l, int dir) {
+    if (history.size() > 1) {
+        /* Update the current history entry before overwriting it with the
+         * next one. */
+        history[history.size() - 1 - l.history_index] = l.buf;
         /* Show the new entry */
-        history_index_ += (dir == LINENOISE_HISTORY_PREV) ? 1 : -1;
-        if (history_index_ < 0) {
-            history_index_ = 0;
+        l.history_index += (dir == kHistoryPrev) ? 1 : -1;
+        if (l.history_index < 0) {
+            l.history_index = 0;
             return;
-        } else if (history_index_ >= (int)history_.size()) {
-            history_index_ = static_cast<int>(history_.size())-1;
+        } else if (l.history_index >= static_cast<int>(history.size())) {
+            l.history_index = static_cast<int>(history.size()) - 1;
             return;
         }
-        memset(buf_, 0, buf_len_);
-        strcpy(buf_,history_[history_.size() - 1 - history_index_].c_str());
-        len_ = pos_ = static_cast<int>(strlen(buf_));
-        RefreshLine();
+
+        /* Copy the selected history entry into the edit buffer. */
+        l.buf = history[history.size() - 1 - l.history_index];
+        if (l.buf.size() > kMaxLine) l.buf.resize(kMaxLine);
+        l.pos = l.buf.size();
+        fold_clear(l);
+
+        /* History stores the real text, but not the original paste ranges.
+         * If the recalled entry needs folding, create one display fold now
+         * so text typed after recall remains outside the folded range. */
+        RenderFold f;
+        if (build_history_fold(l, f)) fold_add(l, f.start, f.end);
+        refresh_line(l);
     }
 }
 
-/* Delete the character at the right of the cursor without altering the cursor
- * position. Basically this is what happens with the "Delete" keyboard key. */
-inline void linenoiseState::EditDelete() {
-    if (len_ > 0 && pos_ < len_) {
-        int glen = unicodeGraphemeLen(buf_,len_,pos_);
-        memmove(buf_+pos_,buf_+pos_+glen,len_-pos_-glen);
-        len_-=glen;
-        buf_[len_] = '\0';
-        RefreshLine();
+/* Delete the character at the right of the cursor without altering the
+ * cursor position, as the "Delete" keyboard key does. */
+inline void edit_delete(State &l) {
+    if (!l.buf.empty() && l.pos < l.buf.size()) {
+        size_t clen = edit_next_len(l, l.pos);
+        adjust_folds_after_delete(l, l.pos, clen);
+        l.buf.erase(l.pos, clen);
+        refresh_line(l);
     }
 }
 
-/* Backspace implementation. */
-inline void linenoiseState::EditBackspace() {
-    if (pos_ > 0 && len_ > 0) {
-        int glen = unicodePrevGraphemeLen(buf_,pos_);
-        memmove(buf_+pos_-glen,buf_+pos_,len_-pos_);
-        pos_-=glen;
-        len_-=glen;
-        buf_[len_] = '\0';
-        RefreshLine();
+/* Backspace implementation. Deletes the grapheme cluster before the
+ * cursor. */
+inline void edit_backspace(State &l) {
+    if (l.pos > 0 && !l.buf.empty()) {
+        size_t clen = edit_prev_len(l, l.pos);
+        adjust_folds_after_delete(l, l.pos - clen, clen);
+        l.buf.erase(l.pos - clen, clen);
+        l.pos -= clen;
+        refresh_line(l);
     }
 }
 
 /* Delete the previous word, maintaining the cursor at the start of the
  * current word. */
-inline void linenoiseState::EditDeletePrevWord() {
-    int old_pos = pos_;
-    int diff;
+inline void edit_delete_prev_word(State &l) {
+    size_t old_pos = l.pos;
 
-    while (pos_ > 0 && buf_[pos_-1] == ' ')
-        pos_--;
-    while (pos_ > 0 && buf_[pos_-1] != ' ')
-        pos_--;
-    diff = old_pos - pos_;
-    memmove(buf_+pos_,buf_+old_pos,len_-old_pos+1);
-    len_ -= diff;
-    RefreshLine();
+    /* Skip spaces before the word (move backwards by clusters). */
+    while (l.pos > 0 && l.buf[l.pos - 1] == ' ')
+        l.pos -= edit_prev_len(l, l.pos);
+    /* Skip non-space characters (move backwards by clusters). */
+    while (l.pos > 0 && l.buf[l.pos - 1] != ' ')
+        l.pos -= edit_prev_len(l, l.pos);
+    size_t diff = old_pos - l.pos;
+    adjust_folds_after_delete(l, l.pos, diff);
+    l.buf.erase(l.pos, diff);
+    refresh_line(l);
 }
 
-/* This function is the core of the line editing capability of linenoise.
- * It expects 'fd' to be already in "raw mode" so that every key pressed
- * will be returned ASAP to read().
- *
- * The resulting string is put into 'buf' when the user type enter, or
- * when ctrl+d is typed.
- *
- * The function returns the length of the current buffer. */
-inline int linenoiseState::Edit()
-{
+/* ========================= Non-blocking edit API ========================== */
+
+/* Result of one edit_feed() step. */
+enum class EditResult {
+    More,   /* Still editing: feed more input. */
+    Done,   /* Line completed (ENTER): result holds the line. */
+    Eof,    /* Ctrl-D on an empty line, or end of input. */
+    Cancel, /* Ctrl-C. */
+    Error,  /* I/O error. */
+};
+
+/* Remove the temporary "current line" history entry, if active. */
+inline void edit_drop_history_entry(State &l) {
+    if (l.history_entry_active && !history.empty()) {
+        history.pop_back();
+        l.history_entry_active = false;
+    }
+}
+
+/* Start a line editing session: put the terminal in raw mode and show the
+ * prompt. After this, feed input with edit_feed() until it returns
+ * something different from EditResult::More, then call edit_stop().
+ * Returns false (errno=ENOTTY) when the terminal cannot be set up. */
+inline bool edit_start(State &l, int stdin_fd, int stdout_fd, const char *prompt) {
+    l.in_completion = false;
+    l.ifd = stdin_fd != -1 ? stdin_fd : STDIN_FILENO;
+    l.ofd = stdout_fd != -1 ? stdout_fd : STDOUT_FILENO;
+    l.buf.clear();
+    l.prompt = prompt ? prompt : "";
+    l.oldpos = l.pos = 0;
+    fold_clear(l);
+
+    /* Enter raw mode. */
+    raw_mode_ofd = l.ofd;
+    if (enable_raw_mode(l.ifd) == -1) return false;
+
+    l.cols = get_columns(l.ifd, l.ofd);
+    if (l.cols == 0) l.cols = 80;
+    l.oldrows = 0;
+    l.oldrpos = 1; /* Cursor starts on row 1. */
+    l.history_index = 0;
+    active_state = &l;
+
+    /* If stdin is not a tty, stop here with the initialization. We will
+     * actually just read a line from standard input in blocking mode
+     * later, in edit_feed(). */
+    if (!is_tty(l.ifd) && !assume_tty()) return true;
+
     /* The latest history entry is always our current buffer, that
      * initially is just an empty string. */
-    AddHistory("");
+    history_add("");
+    l.history_entry_active = !history.empty();
 
-    if (write(ofd_, prompt_.c_str(), static_cast<int>(prompt_.length())) == -1) return -1;
-    while(1) {
-        int c;
-        char cbuf[4];
-        int nread;
-        char seq[3];
+    if (write_bytes(l.ofd, l.prompt.data(), l.prompt.size()) == -1) return false;
+    return true;
+}
 
-#ifdef _WIN32
-        nread = win32read(&c);
-        if (nread == 1) {
-            cbuf[0] = c;
+/* Read a line from stdin with no editing and no length limits, used when
+ * the standard input is not a tty (pipe, file redirection...). */
+inline EditResult read_no_tty(std::string &out) {
+    out.clear();
+    if (!std::getline(std::cin, out)) return EditResult::Eof;
+    return EditResult::Done;
+}
+
+/* Make room and append bytes to the temporary paste buffer. Returns false
+ * if the paste would exceed maxlen. */
+inline bool paste_buffer_append(std::string &buf, const char *s, size_t slen,
+                                size_t maxlen) {
+    if (buf.size() > maxlen || slen > maxlen - buf.size()) return false;
+    buf.append(s, slen);
+    return true;
+}
+
+/* Read a bracketed paste until ESC[201~ and insert the real bytes. If
+ * folding is needed, remember the inserted range so only rendering is
+ * shortened. */
+inline void edit_paste(State &l) {
+    static const char END[] = "\x1b[201~";
+    const size_t ENDLEN = sizeof(END) - 1;
+    std::string buf;
+    size_t match = 0;
+    size_t maxlen = kMaxLine > l.buf.size() ? kMaxLine - l.buf.size() : 0;
+    bool overflowed = false;
+
+    if (maxlen > kPasteMaxBytes) maxlen = kPasteMaxBytes;
+    /* Once all fold slots are used, consume later pastes without storing
+     * them. */
+    if (l.folds.size() == kMaxFolds) maxlen = 0;
+
+    while (true) {
+        char c;
+        if (read_byte(l.ifd, &c) != 1) break;
+
+        /* Track a possible ESC[201~ terminator without copying it into the
+         * paste. If it turns out to be ordinary input, flush the partial
+         * match below. */
+        if (c == END[match]) {
+            match++;
+            if (match == ENDLEN) break;
+            continue;
         }
-#else
-        nread = unicodeReadUTF8Char(ifd_,cbuf,&c);
-#endif
-        if (nread <= 0) return (int)len_;
 
-        /* Only autocomplete when the callback is set. It returns < 0 when
-         * there was an error reading from fd. Otherwise it will return the
-         * character that should be handled next. */
-        if (c == 9 && completionCallback != NULL) {
-            nread = completeLine(cbuf,&c);
-            /* Return on errors */
-            if (c < 0) return len_;
-            /* Read next character when 0 */
-            if (c == 0) continue;
+        if (match > 0) {
+            if (!overflowed && !paste_buffer_append(buf, END, match, maxlen))
+                overflowed = true;
+            match = 0;
+            if (c == END[0]) {
+                match = 1;
+                continue;
+            }
         }
 
-        switch(c) {
-        case ENTER:    /* enter */
-            if (!history_.empty()) history_.pop_back();
-            if (mlmode_) EditMoveEnd();
-            return (int)len_;
-        case CTRL_C:     /* ctrl-c */
-            errno = EAGAIN;
-            return -1;
-        case BACKSPACE:   /* backspace */
-        case 8:     /* ctrl-h */
-            EditBackspace();
-            break;
-        case CTRL_D:     /* ctrl-d, remove char at right of cursor, or if the
-                            line is empty, act as end-of-file. */
-            if (len_ > 0) {
-                EditDelete();
+        if (!overflowed && !paste_buffer_append(buf, &c, 1, maxlen))
+            overflowed = true;
+    }
+
+    if (overflowed) {
+        beep();
+        return;
+    }
+    if (buf.empty()) return;
+
+    {
+        /* Normalize pasted CR and CRLF to LF, so the edit buffer uses one
+         * internal newline representation. */
+        size_t r = 0, w = 0;
+        while (r < buf.size()) {
+            if (buf[r] == '\r') {
+                buf[w++] = '\n';
+                r += (r + 1 < buf.size() && buf[r + 1] == '\n') ? 2 : 1;
             } else {
-                history_.pop_back();
-                return -1;
+                buf[w++] = buf[r++];
             }
-            break;
-        case CTRL_T:    /* ctrl-t, swaps current character with previous. */
-            if (pos_ > 0 && pos_ < len_) {
-                char aux = wbuf_[pos_-1];
-                wbuf_[pos_-1] = wbuf_[pos_];
-                wbuf_[pos_] = aux;
-                if (pos_ != len_-1) pos_++;
-                RefreshLine();
-            }
-            break;
-        case CTRL_B:     /* ctrl-b */
-            EditMoveLeft();
-            break;
-        case CTRL_F:     /* ctrl-f */
-            EditMoveRight();
-            break;
-        case CTRL_P:    /* ctrl-p */
-            EditHistoryNext(LINENOISE_HISTORY_PREV);
-            break;
-        case CTRL_N:    /* ctrl-n */
-            EditHistoryNext(LINENOISE_HISTORY_NEXT);
-            break;
-        case ESC:    /* escape sequence */
-            /* Read the next two bytes representing the escape sequence.
-             * Use two calls to handle slow terminals returning the two
-             * chars at different times. */
-            if (read(ifd_,seq,1) == -1) break;
-            if (read(ifd_,seq+1,1) == -1) break;
-
-            /* ESC [ sequences. */
-            if (seq[0] == '[') {
-                if (seq[1] >= '0' && seq[1] <= '9') {
-                    /* Extended escape, read additional byte. */
-                    if (read(ifd_,seq+2,1) == -1) break;
-                    if (seq[2] == '~') {
-                        switch(seq[1]) {
-                        case '3': /* Delete key. */
-                            EditDelete();
-                            break;
-                        }
-                    }
-                } else {
-                    switch(seq[1]) {
-                    case 'A': /* Up */
-                        EditHistoryNext(LINENOISE_HISTORY_PREV);
-                        break;
-                    case 'B': /* Down */
-                        EditHistoryNext(LINENOISE_HISTORY_NEXT);
-                        break;
-                    case 'C': /* Right */
-                        EditMoveRight();
-                        break;
-                    case 'D': /* Left */
-                        EditMoveLeft();
-                        break;
-                    case 'H': /* Home */
-                        EditMoveHome();
-                        break;
-                    case 'F': /* End*/
-                        EditMoveEnd();
-                        break;
-                    }
-                }
-            }
-
-            /* ESC O sequences. */
-            else if (seq[0] == 'O') {
-                switch(seq[1]) {
-                case 'H': /* Home */
-                    EditMoveHome();
-                    break;
-                case 'F': /* End*/
-                    EditMoveEnd();
-                    break;
-                }
-            }
-            break;
-        default:
-            if (EditInsert(cbuf,nread)) return -1;
-            break;
-        case CTRL_U: /* Ctrl+u, delete the whole line. */
-            wbuf_[0] = '\0';
-            pos_ = len_ = 0;
-            RefreshLine();
-            break;
-        case CTRL_K: /* Ctrl+k, delete from current to end of line. */
-            wbuf_[pos_] = '\0';
-            len_ = pos_;
-            RefreshLine();
-            break;
-        case CTRL_A: /* Ctrl+a, go to the start of the line */
-            EditMoveHome();
-            break;
-        case CTRL_E: /* ctrl+e, go to the end of the line */
-            EditMoveEnd();
-            break;
-        case CTRL_L: /* ctrl+l, clear screen */
-            linenoiseClearScreen();
-            RefreshLine();
-            break;
-        case CTRL_W: /* ctrl+w, delete previous word */
-            EditDeletePrevWord();
-            break;
         }
+        buf.resize(w);
     }
-    return len_;
+
+    if (!mask_mode && should_fold_text(buf.data(), buf.size())) {
+        size_t start = l.pos;
+        if (!edit_insert_no_refresh(l, buf.data(), buf.size())) {
+            beep();
+            return;
+        }
+        fold_add(l, start, start + buf.size());
+        refresh_line(l);
+    } else {
+        edit_insert(l, buf.data(), buf.size());
+    }
 }
 
-/* This function calls the line editing function Edit() using
- * the STDIN file descriptor set in raw mode. */
-inline bool linenoiseState::Raw(std::string& line) {
-    bool quit = false;
+/* Return the number of bytes of the UTF-8 sequence introduced by byte c. */
+inline int utf8_seq_len(char c) {
+    auto uc = static_cast<unsigned char>(c);
+    if ((uc & 0x80) == 0) return 1;
+    if ((uc & 0xE0) == 0xC0) return 2;
+    if ((uc & 0xF0) == 0xE0) return 3;
+    if ((uc & 0xF8) == 0xF0) return 4;
+    return 1; /* Invalid encoding, treat as a single byte. */
+}
 
-    if (!isatty(STDIN_FILENO)) {
-        /* Not a tty: read from file / pipe. */
-        int c;
-        while ((c = getc(stdin)) != EOF) {
-            if (c == '\r')  // CRLF -> LF
-               continue;
-            if (c == '\n' || c == '\r') // send command
-               break;
+/* Process one unit of input. Returns EditResult::More while the user is
+ * still editing; on EditResult::Done the completed line is stored in
+ * 'result'. */
+inline EditResult edit_feed(State &l, std::string &result) {
+    /* Not a TTY: pass control to line reading without character count
+     * limits. */
+    if (!is_tty(l.ifd) && !assume_tty()) return read_no_tty(result);
 
-            line += c;
+    char c;
+    int nread;
+    char seq[3];
+
+    nread = read_byte(l.ifd, &c);
+    if (nread < 0) {
+        return (errno == EAGAIN || errno == EWOULDBLOCK) ? EditResult::More
+                                                         : EditResult::Error;
+    } else if (nread == 0) {
+        return EditResult::Eof;
+    }
+
+    /* Only autocomplete when the callback is set. complete_line() returns
+     * the character to be handled next, or zero when the key was consumed
+     * to navigate completions. */
+    if ((l.in_completion || c == TAB) && completion_callback) {
+        int retval = complete_line(l, c);
+        /* Read next character when 0 */
+        if (retval == 0) return EditResult::More;
+        c = static_cast<char>(retval);
+    }
+
+    switch (c) {
+    case ENTER: /* enter */
+        edit_drop_history_entry(l);
+        if (ml_mode) edit_move_end(l);
+        if (hints_callback) {
+            /* Force a refresh without hints to leave the previous line as
+             * the user typed it after a newline. */
+            HintsCallbackFn hc = std::move(hints_callback);
+            hints_callback = nullptr;
+            refresh_line(l);
+            hints_callback = std::move(hc);
         }
-        if (!line.length())
-            quit = true;
-
-    } else {
-        /* Interactive editing. */
-        if (enableRawMode(STDIN_FILENO) == false) {
-            return quit;
-        }
-
-	/* Buffer starts empty.  Since we're potentially
-	 * reusing the state, we need to reset these. */
-	pos_ = 0;
-	len_ = 0;
-	buf_[0] = '\0';
-	wbuf_[0] = '\0';
-
-        auto count = Edit();
-        if (count == -1) {
-            quit = true;
+        result = l.buf;
+        return EditResult::Done;
+    case CTRL_C: /* ctrl-c */
+        /* Unlike upstream, drop the temporary history entry here too, so a
+         * canceled line never lingers in the history. */
+        edit_drop_history_entry(l);
+        return EditResult::Cancel;
+    case BACKSPACE: /* backspace */
+    case CTRL_H:    /* ctrl-h */
+        edit_backspace(l);
+        break;
+    case CTRL_D: /* ctrl-d, remove char at right of cursor, or if the line
+                    is empty, act as end-of-file. */
+        if (!l.buf.empty()) {
+            edit_delete(l);
         } else {
-            line.assign(buf_, count);
+            edit_drop_history_entry(l);
+            return EditResult::Eof;
+        }
+        break;
+    case CTRL_T: /* ctrl-t, swaps current character with previous. */
+        if (l.pos > 0 && l.pos < l.buf.size()) {
+            size_t prevlen = edit_prev_len(l, l.pos);
+            size_t currlen = edit_next_len(l, l.pos);
+            size_t prevstart = l.pos - prevlen;
+            if (range_overlaps_fold(l, prevstart, prevlen + currlen)) {
+                beep();
+                break;
+            }
+            /* Swap the two grapheme clusters around the cursor. */
+            std::string tmp = l.buf.substr(l.pos, currlen);
+            l.buf.erase(l.pos, currlen);
+            l.buf.insert(prevstart, tmp);
+            if (l.pos + currlen <= l.buf.size()) l.pos += currlen;
+            refresh_line(l);
+        }
+        break;
+    case CTRL_B: /* ctrl-b */
+        edit_move_left(l);
+        break;
+    case CTRL_F: /* ctrl-f */
+        edit_move_right(l);
+        break;
+    case CTRL_P: /* ctrl-p */
+        edit_history_next(l, kHistoryPrev);
+        break;
+    case CTRL_N: /* ctrl-n */
+        edit_history_next(l, kHistoryNext);
+        break;
+    case ESC: /* escape sequence */
+        /* Read the next two bytes representing the escape sequence. Use two
+         * calls to handle slow terminals returning the two chars at
+         * different times. */
+        if (read_byte(l.ifd, seq) != 1) break;
+        if (read_byte(l.ifd, seq + 1) != 1) break;
+
+        /* ESC [ sequences. */
+        if (seq[0] == '[') {
+            if (seq[1] >= '0' && seq[1] <= '9') {
+                char param[8];
+                size_t plen = 1;
+                char final_byte = 0;
+
+                param[0] = seq[1];
+                while (plen < sizeof(param)) {
+                    char p;
+                    if (read_byte(l.ifd, &p) != 1) break;
+                    if (p >= '0' && p <= '9') {
+                        param[plen++] = p;
+                    } else {
+                        final_byte = p;
+                        break;
+                    }
+                }
+                if (final_byte == '~') {
+                    if (plen == 1 && param[0] == '3') {
+                        edit_delete(l); /* Delete key. */
+                    } else if (plen == 3 && memcmp(param, "200", 3) == 0) {
+                        edit_paste(l);
+                    }
+                }
+            } else {
+                switch (seq[1]) {
+                case 'A': /* Up */
+                    edit_history_next(l, kHistoryPrev);
+                    break;
+                case 'B': /* Down */
+                    edit_history_next(l, kHistoryNext);
+                    break;
+                case 'C': /* Right */
+                    edit_move_right(l);
+                    break;
+                case 'D': /* Left */
+                    edit_move_left(l);
+                    break;
+                case 'H': /* Home */
+                    edit_move_home(l);
+                    break;
+                case 'F': /* End */
+                    edit_move_end(l);
+                    break;
+                }
+            }
         }
 
-        disableRawMode(STDIN_FILENO);
-        printf("\n");
+        /* ESC O sequences. */
+        else if (seq[0] == 'O') {
+            switch (seq[1]) {
+            case 'H': /* Home */
+                edit_move_home(l);
+                break;
+            case 'F': /* End */
+                edit_move_end(l);
+                break;
+            }
+        }
+        break;
+    default: {
+        /* Handle UTF-8 multi-byte sequences: when we receive the first byte
+         * of a multi-byte character, read the remaining bytes before
+         * inserting. */
+        char utf8[4];
+        int utf8len = utf8_seq_len(c);
+        utf8[0] = c;
+        for (int i = 1; i < utf8len; i++) {
+            if (read_byte(l.ifd, utf8 + i) != 1) {
+                utf8len = i;
+                break;
+            }
+        }
+        edit_insert(l, utf8, static_cast<size_t>(utf8len));
+        break;
     }
-    return quit;
+    case CTRL_U: /* Ctrl+u, delete the whole line. */
+        l.buf.clear();
+        l.pos = 0;
+        fold_clear(l);
+        refresh_line(l);
+        break;
+    case CTRL_K: /* Ctrl+k, delete from current to end of line. */
+        adjust_folds_after_delete(l, l.pos, l.buf.size() - l.pos);
+        l.buf.erase(l.pos);
+        refresh_line(l);
+        break;
+    case CTRL_A: /* Ctrl+a, go to the start of the line */
+        edit_move_home(l);
+        break;
+    case CTRL_E: /* ctrl+e, go to the end of the line */
+        edit_move_end(l);
+        break;
+    case CTRL_L: /* ctrl+l, clear screen */
+        clear_screen();
+        refresh_line(l);
+        break;
+    case CTRL_W: /* ctrl+w, delete previous word */
+        edit_delete_prev_word(l);
+        break;
+    }
+    return EditResult::More;
 }
 
-inline linenoiseState::linenoiseState(const char *prompt_str, int stdin_fd, int stdout_fd) {
-    /* Populate the linenoise state that we pass to functions implementing
-     * specific editing functionalities. */
-    ifd_ = stdin_fd;
-    ofd_ = stdout_fd;
-    buf_ = wbuf_;
-    std::string p = (prompt_str) ? std::string(prompt_str) : std::string("> ");
-    SetPrompt(p);
-
-    /* Buffer starts empty. */
-    buf_[0] = '\0';
-    buf_len_--; /* Make sure there is always space for the nulterm */
+/* End an editing session: restore the terminal to normal mode. */
+inline void edit_stop(State &l) {
+    edit_drop_history_entry(l);
+    active_state = nullptr;
+    if (!is_tty(l.ifd) && !assume_tty()) return;
+    disable_raw_mode(l.ifd);
+    write_bytes(l.ofd, "\n", 1);
 }
 
-inline void linenoiseState::EnableMultiLine() { mlmode_ = true; }
-inline void linenoiseState::DisableMultiLine() { mlmode_ = false; }
+/* Hide the current line. Call Show() to redisplay it. Useful to print
+ * asynchronous output without mixing it with the edited line. */
+inline void hide(State &l) {
+    if (ml_mode)
+        refresh_multi_line(l, kRefreshClean);
+    else
+        refresh_single_line(l, kRefreshClean);
+}
 
-/* The high level function that is the main API of the linenoise library.
- * This function checks if the terminal has basic capabilities, just checking
- * for a blacklist of stupid terminals, and later either calls the line
- * editing function or uses dummy fgets() so that you will be able to type
- * something even in the most desperate of the conditions. */
-inline bool linenoiseState::Readline(std::string& line) {
-    if (isUnsupportedTerm()) {
-        printf("%s", prompt_.c_str());
-        fflush(stdout);
-        std::getline(std::cin, line);
-        return false;
+/* Show the current line again after hide(). */
+inline void show(State &l) {
+    if (l.in_completion) {
+        refresh_line_with_completion(l, nullptr, kRefreshWrite);
     } else {
-        return Raw(line);
+        refresh_line_with_flags(l, kRefreshWrite);
     }
-
-    return false;
 }
 
-inline std::string linenoiseState::Readline(bool& quit) {
+/* A blocking loop over edit_start()/edit_feed()/edit_stop(). */
+inline EditResult blocking_edit(int stdin_fd, int stdout_fd, const char *prompt,
+                                std::string &line) {
+    State l;
+    if (!edit_start(l, stdin_fd, stdout_fd, prompt)) return EditResult::Error;
+    EditResult res;
+    while ((res = edit_feed(l, line)) == EditResult::More) {
+    }
+    edit_stop(l);
+    return res;
+}
+
+/* Cooked-mode fallback for terminals that cannot handle escape sequences:
+ * print the prompt and read a plain line. */
+inline EditResult cooked_edit(const char *prompt, std::string &line) {
+    fputs(prompt, stdout);
+    fflush(stdout);
+    EditResult res = read_no_tty(line);
+    while (!line.empty() && line.back() == '\r') line.pop_back();
+    return res;
+}
+
+/* The high level line editing entry point: picks raw editing, plain pipe
+ * reading or the cooked fallback depending on the terminal. */
+inline EditResult edit_line(const char *prompt, std::string &line) {
+    line.clear();
+    if (!is_tty(STDIN_FILENO) && !assume_tty()) {
+        /* Not a tty: read from file / pipe with no line length limits. */
+        return read_no_tty(line);
+    }
+    if (is_unsupported_term()) return cooked_edit(prompt, line);
+    return blocking_edit(STDIN_FILENO, STDOUT_FILENO, prompt, line);
+}
+
+} // namespace detail
+
+/* ============================= Public API ================================= */
+
+/* Completion callback: receives the current edit buffer and fills the
+ * vector with completion candidates. */
+using CompletionCallback = detail::CompletionCallbackFn;
+
+/* Hints callback: receives the current edit buffer and returns the hint to
+ * display at the right of the cursor (empty string for no hint). 'color'
+ * is an ANSI color code (e.g. 35 for magenta, -1 for default), 'bold'
+ * selects bold text. */
+using HintsCallback = detail::HintsCallbackFn;
+
+/* Register a callback function to be called for tab-completion. */
+inline void SetCompletionCallback(CompletionCallback fn) {
+    detail::completion_callback = std::move(fn);
+}
+
+/* Register a callback function to show hints at the right of the prompt. */
+inline void SetHintsCallback(HintsCallback fn) {
+    detail::hints_callback = std::move(fn);
+}
+
+/* Enable or disable the multi line mode. */
+inline void SetMultiLine(bool multi_line_mode) {
+    detail::ml_mode = multi_line_mode;
+}
+
+/* Enable "mask mode": the terminal displays '*' for every typed character,
+ * useful for passwords and other secrets. */
+inline void EnableMaskMode() { detail::mask_mode = true; }
+inline void DisableMaskMode() { detail::mask_mode = false; }
+
+/* Read a line with full editing. Returns true when the user wants to quit
+ * (Ctrl-C, Ctrl-D on an empty line, or end of input). */
+inline bool Readline(const char *prompt, std::string &line) {
+    auto res = detail::edit_line(prompt, line);
+    return res != detail::EditResult::Done;
+}
+
+inline std::string Readline(const char *prompt, bool &quit) {
     std::string line;
-    quit = Readline(line);
+    quit = Readline(prompt, line);
     return line;
 }
 
-inline std::string linenoiseState::Readline() {
-    bool quit; // dummy
-    return Readline(quit);
-}
-
-/* ================================ History ================================= */
-
-/* At exit we'll try to fix the terminal to the initial conditions. */
-inline void linenoiseAtExit(void) {
-    disableRawMode(STDIN_FILENO);
-
-    // If we're using the global, clean up
-    if (lglobal)
-       delete lglobal;
-    lglobal = NULL;
-}
-
-/* This is the API call to add a new entry in the linenoise history.
- * It uses a fixed array of char pointers that are shifted (memmoved)
- * when the history max length is reached in order to remove the older
- * entry and make room for the new one, so it is not exactly suitable for huge
- * histories, but will work well for a few hundred of entries.
- *
- * Using a circular buffer is smarter, but a bit more complex to handle. */
-inline bool linenoiseState::AddHistory(const char* line) {
-    if (history_max_len_ == 0) return false;
-
-    /* Don't add duplicated lines. */
-    if (!history_.empty() && history_.back() == line) return false;
-
-    /* If we reached the max length, remove the older line. */
-    if (history_.size() == history_max_len_) {
-        history_.erase(history_.begin());
-    }
-    history_.push_back(line);
-
-    return true;
+inline std::string Readline(const char *prompt) {
+    bool quit; /* ignored */
+    return Readline(prompt, quit);
 }
 
 /* Set the maximum length for the history. This function can be called even
- * if there is already some history, the function will make sure to retain
- * just the latest 'len' elements if the new history length value is smaller
- * than the amount of items already inside the history. */
-inline bool linenoiseState::SetHistoryMaxLen(size_t mlen) {
-    if (mlen < 1) return false;
-    history_max_len_ = mlen;
-    if (mlen < history_.size()) {
-        history_.resize(mlen);
-    }
-    return true;
+ * if there is already some history, and will make sure to retain just the
+ * latest 'len' elements if the new history length is smaller than the
+ * number of items already stored. */
+inline bool SetHistoryMaxLen(size_t len) {
+    return detail::history_set_max_len(len);
 }
 
-/* Save the history in the specified file. On success *true* is returned
- * otherwise *false* is returned. */
-inline bool linenoiseState::SaveHistory(const char* path) {
-    std::ofstream f(path); // TODO: need 'std::ios::binary'?
-    if (!f) return false;
-    for (const auto& h: history_) {
-        f << h << std::endl;
-    }
-    return true;
+/* Add a new entry to the history. */
+inline bool AddHistory(const char *line) { return detail::history_add(line); }
+
+/* Save the history in the specified file. */
+inline bool SaveHistory(const char *path) { return detail::history_save(path); }
+
+/* Load the history from the specified file. */
+inline bool LoadHistory(const char *path) { return detail::history_load(path); }
+
+inline const std::vector<std::string> &GetHistory() { return detail::history; }
+
+/* Clear the screen. */
+inline void ClearScreen() { detail::clear_screen(); }
+
+/* Temporarily hide the line being edited (to print asynchronous output),
+ * then show it again. Only meaningful while a Readline() call is active. */
+inline void HideLine() {
+    if (detail::active_state) detail::hide(*detail::active_state);
 }
 
-/* Load the history from the specified file. If the file does not exist
- * zero is returned and no operation is performed.
- *
- * If the file exists and the operation succeeded *true* is returned, otherwise
- * on error *false* is returned. */
-inline bool linenoiseState::LoadHistory(const char* path) {
-    std::ifstream f(path);
-    if (!f) return false;
-    std::string line;
-    while (std::getline(f, line)) {
-        AddHistory(line.c_str());
-    }
-    return true;
+inline void ShowLine() {
+    if (detail::active_state) detail::show(*detail::active_state);
 }
 
+/* Debugging helper: print scan codes on screen for keyboard debugging. */
+inline void PrintKeyCodes() {
+    char quit[4];
 
+    printf("Linenoise key codes debugging mode.\n"
+           "Press keys to see scan codes. Type 'quit' at any time to exit.\n");
+    detail::raw_mode_ofd = STDOUT_FILENO;
+    if (detail::enable_raw_mode(STDIN_FILENO) == -1) return;
+    memset(quit, ' ', 4);
+    while (true) {
+        char c;
+        int nread = detail::read_byte(STDIN_FILENO, &c);
+        if (nread <= 0) continue;
+        memmove(quit, quit + 1, sizeof(quit) - 1); /* shift string to left. */
+        quit[sizeof(quit) - 1] = c; /* Insert current char on the right. */
+        if (memcmp(quit, "quit", sizeof(quit)) == 0) break;
 
-/* Function style interface */
-inline void SetCompletionCallback(CompletionCallback fn){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    lglobal->SetCompletionCallback(fn);
-};
-inline void SetMultiLine(bool ml){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    if (ml) {
-        lglobal->EnableMultiLine();
-    } else {
-        lglobal->DisableMultiLine();
+        printf("'%c' %02x (%d) (type quit to exit)\n", isprint(c) ? c : '?',
+               static_cast<int>(c), static_cast<int>(c));
+        printf("\r"); /* Go to left edge manually, we are in raw mode. */
+        fflush(stdout);
     }
-};
-inline bool AddHistory(const char* line){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    return lglobal->AddHistory(line);
-};
-inline bool SetHistoryMaxLen(size_t len){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    return lglobal->SetHistoryMaxLen(len);
-};
-inline bool SaveHistory(const char* path){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    return lglobal->SaveHistory(path);
-};
-inline bool LoadHistory(const char* path){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    return lglobal->LoadHistory(path);
-};
-inline const std::vector<std::string>& GetHistory(){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    return lglobal->GetHistory();
-};
-inline bool Readline(const char *prompt, std::string& line){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    lglobal->SetPrompt(prompt);
-    return lglobal->Readline(line);
-};
-inline std::string Readline(const char *prompt, bool& quit){
-    if (!lglobal)
-       lglobal = new linenoiseState();
-    lglobal->SetPrompt(prompt);
-    std::string line;
-    quit = lglobal->Readline(line);
-    return line;
-};
-inline std::string Readline(const char *prompt){
-    bool quit; // dummy
-    return Readline(prompt, quit);
-};
-
-
+    detail::disable_raw_mode(STDIN_FILENO);
+}
 
 } // namespace linenoise
 
-#ifdef _WIN32
-#undef isatty
-#undef write
-#undef read
-#pragma warning(pop)
-#endif
-
-#endif /* __LINENOISE_HPP */
+#endif /* LINENOISE_HPP */

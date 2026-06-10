@@ -1,57 +1,54 @@
 #include <iostream>
+
 #include "../linenoise.hpp"
 
-using namespace std;
-
-int main(int argc, const char** argv)
-{
+int main() {
     const auto path = "history.txt";
 
-#ifdef _WIN32
-    const char *prompt = "hello> ";
-#else
-    const char *prompt = "\033[32mこんにちは\x1b[0m> ";
-#endif
-
-    linenoise::linenoiseState l(prompt);
-
     // Enable the multi-line mode
-    l.EnableMultiLine();
+    linenoise::SetMultiLine(true);
 
     // Set max length of the history
-    l.SetHistoryMaxLen(4);
+    linenoise::SetHistoryMaxLen(8);
 
     // Setup completion words every time when a user types
-    l.SetCompletionCallback([](const char* editBuffer, std::vector<std::string>& completions) {
-        if (editBuffer[0] == 'h') {
-#ifdef _WIN32
-            completions.push_back("hello こんにちは");
-            completions.push_back("hello こんにちは there");
-#else
-            completions.push_back("hello");
-            completions.push_back("hello there");
-#endif
-        }
-    });
+    linenoise::SetCompletionCallback(
+        [](const char* editBuffer, std::vector<std::string>& completions) {
+            if (editBuffer[0] == 'h') {
+                completions.push_back("hello こんにちは");
+                completions.push_back("hello こんにちは there 👋");
+            }
+        });
+
+    // Show a hint at the right of the prompt while typing
+    linenoise::SetHintsCallback(
+        [](const char* editBuffer, int& color, bool& bold) -> std::string {
+            if (std::string(editBuffer) == "hello") {
+                color = 35; // magenta
+                bold = false;
+                return " こんにちは";
+            }
+            return {};
+        });
 
     // Load history
-    l.LoadHistory(path);
+    linenoise::LoadHistory(path);
 
     while (true) {
         std::string line;
-        auto quit = l.Readline(line);
+        auto quit = linenoise::Readline("\x1b[32mこんにちは\x1b[0m> ", line);
 
         if (quit) {
             break;
         }
 
-        cout <<  "echo: '" << line << "'" << endl;
+        std::cout << "echo: '" << line << "'" << std::endl;
 
-        // Add line to history
-        l.AddHistory(line.c_str());
+        // Add text to history
+        linenoise::AddHistory(line.c_str());
 
         // Save history
-        l.SaveHistory(path);
+        linenoise::SaveHistory(path);
     }
 
     return 0;
