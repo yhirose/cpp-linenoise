@@ -16,6 +16,9 @@ int main() {
         linenoise::NEWLINE_SPACE_ENTER | linenoise::NEWLINE_LF);
     linenoise::SetContinuationPrompt("... ");
 
+    // Ghost text shown while the input is empty
+    linenoise::SetPlaceholder("Type a message (try \"h\" + TAB, Ctrl-R, ↑/↓)");
+
     // Set max length of the history
     linenoise::SetHistoryMaxLen(8);
 

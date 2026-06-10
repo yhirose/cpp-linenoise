@@ -133,9 +133,9 @@ static void test_widths() {
     CHECK_EQ(width("ｱｲｳ"), 3u);               /* halfwidth katakana */
     CHECK_EQ(width("Ａ１"), 4u);              /* fullwidth forms */
     CHECK_EQ(width("한글"), 4u);              /* Hangul syllables */
-    CHECK_EQ(width("각"), 2u); /* Hangul jamo L+V+T = 1 block */
-    CHECK_EQ(width("é"), 1u);           /* e + combining acute */
-    CHECK_EQ(width("à̖́"), 1u); /* multiple combining marks */
+    CHECK_EQ(width("각"), 2u); /* Hangul jamo L+V+T = 1 block */
+    CHECK_EQ(width("é"), 1u);           /* e + combining acute */
+    CHECK_EQ(width("à̖́"), 1u); /* multiple combining marks */
     CHECK_EQ(width("👍"), 2u);                /* emoji */
     CHECK_EQ(width("👍🏽"), 2u);                /* emoji + skin tone modifier */
     CHECK_EQ(width("👩‍👩‍👧‍👦"), 2u);                /* ZWJ family sequence */
@@ -503,6 +503,147 @@ static void test_multiline_cursor_movement() {
     SetNewlineConventions(NEWLINE_ALT_ENTER | NEWLINE_LF); /* defaults */
 }
 
+static void test_word_movement() {
+    detail::history.clear();
+    /* Alt+B (ESC b) moves to the start of the previous word; typed text
+     * lands there. */
+    {
+        EditHarness h("> ", "foo bar\x1b" "bX\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "foo Xbar");
+    }
+    /* Ctrl+Left (ESC [1;5D) does the same; Ctrl+Right (ESC [1;5C) moves
+     * past the word end. */
+    {
+        EditHarness h("> ", "foo bar\x1b[1;5D\x1b[1;5DX\x1b[1;5CY\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "XfooY bar");
+    }
+    /* Alt+D deletes the next word; Alt+Backspace the previous one. */
+    {
+        EditHarness h("> ", "one two\x01\x1b" "d\r"); /* Home, Alt+D */
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == " two");
+    }
+    {
+        EditHarness h("> ", "one two\x1b\x7f\r"); /* Alt+Backspace */
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "one ");
+    }
+    /* Word movement counts grapheme clusters, not bytes. */
+    {
+        EditHarness h("> ", "こんにちは 世界\x1b" "b\x1b" "bX\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "Xこんにちは 世界");
+    }
+}
+
+static void test_placeholder() {
+    detail::history.clear();
+    SetPlaceholder("Type a message");
+    {
+        EditHarness h("> ", "\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        std::string out = h.output();
+        CHECK(out.find("Type a message") != std::string::npos);
+        CHECK(out.find("\x1b[2m") != std::string::npos); /* dim attribute */
+    }
+    /* The placeholder reappears after the buffer becomes empty again. */
+    {
+        EditHarness h("> ", "a\x7f\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "");
+        std::string out = h.output();
+        CHECK(out.rfind("Type a message") > out.find("Type a message"));
+    }
+    SetPlaceholder("");
+}
+
+static void test_reverse_search() {
+    detail::history.clear();
+    AddHistory("echo one");
+    AddHistory("ls -la");
+    AddHistory("echo two");
+
+    /* Ctrl-R + "echo" finds the newest match; Enter submits it. */
+    {
+        EditHarness h("> ", "\x12" "echo\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "echo two");
+        std::string out = h.output();
+        CHECK(out.find("(reverse-i-search)") != std::string::npos);
+    }
+    /* A second Ctrl-R cycles to the older match. */
+    {
+        EditHarness h("> ", "\x12" "echo\x12\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "echo one");
+    }
+    /* Ctrl-G aborts and restores the line that was being typed. */
+    {
+        EditHarness h("> ", "abc\x12ls\x07\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "abc");
+    }
+    /* A navigation key closes the search and edits the match. */
+    {
+        EditHarness h("> ", "\x12ls\x01X\r"); /* Ctrl-A then type X */
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "Xls -la");
+    }
+}
+
+static void test_async_edit_api() {
+    detail::history.clear();
+    /* Drive the public non-blocking API directly. */
+    int in_fds[2], out_fds[2];
+    pipe_(in_fds);
+    pipe_(out_fds);
+    const char *input = "hi\r";
+    write_(in_fds[1], input, 3);
+
+    EditState st;
+    CHECK(EditStart(st, "async> ", in_fds[0], out_fds[1]));
+    std::string line;
+    EditStatus s;
+    while ((s = EditFeed(st, line)) == EditStatus::More) {
+    }
+    CHECK(s == EditStatus::Done);
+    CHECK(line == "hi");
+    EditHide(st);
+    EditShow(st);
+    EditStop(st);
+
+    close_(in_fds[1]);
+    close_(in_fds[0]);
+    close_(out_fds[1]);
+    close_(out_fds[0]);
+}
+
+#ifndef _WIN32
+static void test_history_file_permissions() {
+    detail::history.clear();
+    AddHistory("secret");
+    const char *path = "test_perms.tmp";
+    CHECK(SaveHistory(path));
+    struct stat st;
+    CHECK_EQ(stat(path, &st), 0);
+    CHECK_EQ(st.st_mode & 0777, 0600);
+    remove(path);
+}
+#endif
+
 static void test_multiline_mode() {
     detail::history.clear();
     SetMultiLine(true);
@@ -538,6 +679,13 @@ int main() {
     test_edit_wide_line_scroll();
     test_newline_conventions();
     test_multiline_cursor_movement();
+    test_word_movement();
+    test_placeholder();
+    test_reverse_search();
+    test_async_edit_api();
+#ifndef _WIN32
+    test_history_file_permissions();
+#endif
     test_multiline_mode();
 
     printf("%d checks, %d failed\n", tests_run, tests_failed);

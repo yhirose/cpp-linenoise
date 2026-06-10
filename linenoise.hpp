@@ -78,6 +78,7 @@
 #define LINENOISE_HPP
 
 #ifndef _WIN32
+#include <fcntl.h>
 #include <strings.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -802,6 +803,7 @@ enum NewlineConventionBits : int {
 };
 inline int newline_conventions = kNewlineAltEnter | kNewlineLf;
 inline std::string continuation_prompt; /* Shown before continuation lines. */
+inline std::string placeholder; /* Dim text shown while the buffer is empty. */
 
 enum KEY_ACTION {
     KEY_NULL = 0,
@@ -811,6 +813,7 @@ enum KEY_ACTION {
     CTRL_D = 4,
     CTRL_E = 5,
     CTRL_F = 6,
+    CTRL_G = 7,
     CTRL_H = 8,
     TAB = 9,
     CTRL_J = 10,
@@ -819,6 +822,7 @@ enum KEY_ACTION {
     ENTER = 13,
     CTRL_N = 14,
     CTRL_P = 16,
+    CTRL_R = 18,
     CTRL_T = 20,
     CTRL_U = 21,
     CTRL_W = 23,
@@ -843,6 +847,13 @@ struct State {
     bool history_entry_active = false; /* Temp history entry not yet removed. */
     /* Folded byte ranges of buf (display-only), sorted by start offset. */
     std::vector<std::pair<size_t, size_t>> folds;
+    /* Reverse incremental search (Ctrl-R) state. */
+    bool searching = false;
+    std::string search_query;
+    int search_found = -1;        /* History index of the current match. */
+    std::string search_saved_buf; /* Buffer/cursor/prompt before search. */
+    size_t search_saved_pos = 0;
+    std::string search_saved_prompt;
 };
 
 inline State *active_state = nullptr; /* For Hide()/Show(). */
@@ -1205,25 +1216,44 @@ inline bool history_set_max_len(size_t len) {
     return true;
 }
 
-/* Save the history in the specified file. Returns true on success. */
+/* Save the history in the specified file. Returns true on success. The
+ * file is created with (and tightened to) user-only permissions, since a
+ * history can hold secrets (see CVE-2025-9810): fchmod() on the open
+ * descriptor avoids the symlink race of chmod() on the path. */
 inline bool history_save(const char *filename) {
-#ifndef _WIN32
-    mode_t old_umask = umask(S_IXUSR | S_IRWXG | S_IRWXO);
-#endif
-    std::ofstream f(filename, std::ios::binary);
-#ifndef _WIN32
-    umask(old_umask);
-    if (f) ::chmod(filename, S_IRUSR | S_IWUSR);
-#endif
-    if (!f) return false;
+    std::string data;
     for (const auto &entry : history) {
         /* Keep the history file newline-separated: embedded newlines in an
          * entry are stored as CR and converted back by history_load(). */
         std::string s = entry;
         std::replace(s.begin(), s.end(), '\n', '\r');
-        f << s << '\n';
+        data += s;
+        data += '\n';
     }
+#ifndef _WIN32
+    int fd = ::open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd == -1) return false;
+    if (::fchmod(fd, S_IRUSR | S_IWUSR) == -1) {
+        ::close(fd);
+        return false;
+    }
+    size_t off = 0;
+    while (off < data.size()) {
+        ssize_t w = ::write(fd, data.data() + off, data.size() - off);
+        if (w <= 0) {
+            if (w == -1 && errno == EINTR) continue;
+            ::close(fd);
+            return false;
+        }
+        off += static_cast<size_t>(w);
+    }
+    return ::close(fd) == 0;
+#else
+    std::ofstream f(filename, std::ios::binary);
+    if (!f) return false;
+    f.write(data.data(), static_cast<std::streamsize>(data.size()));
     return f.good();
+#endif
 }
 
 /* Load the history from the specified file. Returns true on success. */
@@ -1486,6 +1516,29 @@ inline void mask_render(std::string &render, size_t &pos) {
     pos = clusters_before;
 }
 
+/* Show the placeholder text (dim) after the prompt while the buffer is
+ * empty. Returns true if it was written. */
+inline bool append_placeholder(std::string &ab, State &l, size_t pwidth) {
+    if (placeholder.empty() || mask_mode || l.searching) return false;
+    if (pwidth + 1 >= l.cols) return false;
+    size_t maxw = l.cols - pwidth - 1;
+    size_t i = 0, w = 0;
+    while (i < placeholder.size()) {
+        size_t g = unicode::next_grapheme_len(placeholder.data(), i,
+                                              placeholder.size());
+        if (g == 0) break;
+        auto cw = static_cast<size_t>(
+            unicode::single_grapheme_width(placeholder.data() + i, g));
+        if (w + cw > maxw) break;
+        w += cw;
+        i += g;
+    }
+    ab += "\x1b[2m"; /* faint */
+    ab.append(placeholder, 0, i);
+    ab += "\x1b[0m";
+    return true;
+}
+
 /* Helper of refresh_single_line() and refresh_multi_line() to show hints
  * to the right of the prompt. */
 inline void refresh_show_hints(std::string &ab, State &l, size_t pwidth,
@@ -1574,9 +1627,13 @@ inline void refresh_single_line(State &l, int flags) {
     if (flags & kRefreshWrite) {
         /* Write the prompt and the current buffer content */
         ab += l.prompt;
-        ab.append(buf, len);
-        /* Show hints if any. */
-        refresh_show_hints(ab, l, pwidth, fullwidth);
+        if (len == 0 && append_placeholder(ab, l, pwidth)) {
+            /* Hints are suppressed while the placeholder shows. */
+        } else {
+            ab.append(buf, len);
+            /* Show hints if any. */
+            refresh_show_hints(ab, l, pwidth, fullwidth);
+        }
     }
 
     /* Erase to right */
@@ -1684,10 +1741,13 @@ inline void refresh_multi_line(State &l, int flags) {
             ab.append(render, lines[k].begin, lines[k].end - lines[k].begin);
         }
 
-        /* Show hints if any (only while the buffer is a single line). */
-        if (lines.size() == 1)
+        /* Show the placeholder on an empty buffer, or hints (only while
+         * the buffer is a single line). */
+        if (render.empty() && append_placeholder(ab, l, pwidth)) {
+        } else if (lines.size() == 1) {
             refresh_show_hints(ab, l, pwidth,
                                unicode::str_width(render.data(), render.size()));
+        }
 
         /* If the cursor lands one row past the rows we wrote (it is at
          * the very end of a line whose display width is an exact multiple
@@ -1860,7 +1920,10 @@ inline void edit_insert(State &l, const char *c, size_t clen) {
                              memchr(c, '\r', clen) != nullptr;
 
         if (!edit_insert_no_refresh(l, c, clen)) return;
-        if (!needs_refresh && !ml_mode && !hints_callback &&
+        /* The first insertion into an empty buffer must run a full
+         * refresh when a placeholder may be on screen. */
+        bool had_placeholder = !placeholder.empty() && l.buf.size() == clen;
+        if (!needs_refresh && !had_placeholder && !ml_mode && !hints_callback &&
             (mask_mode || l.folds.empty())) {
             size_t bufwidth = unicode::str_width(l.buf.data(), l.buf.size());
             if (unicode::str_width(l.prompt.data(), l.prompt.size()) + bufwidth <
@@ -1910,6 +1973,42 @@ inline void edit_move_home(State &l) {
 inline void edit_move_end(State &l) {
     if (l.pos != l.buf.size()) {
         l.pos = l.buf.size();
+        refresh_line(l);
+    }
+}
+
+/* Word-wise movement and deletion (cpp-linenoise extension): a word is a
+ * run of non-blank characters, consistent with Ctrl-W. */
+inline bool is_word_separator(char c) { return c == ' ' || c == '\n'; }
+
+inline void edit_move_word_left(State &l) {
+    if (l.pos == 0) return;
+    while (l.pos > 0 && is_word_separator(l.buf[l.pos - 1]))
+        l.pos -= edit_prev_len(l, l.pos);
+    while (l.pos > 0 && !is_word_separator(l.buf[l.pos - 1]))
+        l.pos -= edit_prev_len(l, l.pos);
+    refresh_line(l);
+}
+
+inline void edit_move_word_right(State &l) {
+    if (l.pos == l.buf.size()) return;
+    while (l.pos < l.buf.size() && is_word_separator(l.buf[l.pos]))
+        l.pos += edit_next_len(l, l.pos);
+    while (l.pos < l.buf.size() && !is_word_separator(l.buf[l.pos]))
+        l.pos += edit_next_len(l, l.pos);
+    refresh_line(l);
+}
+
+/* Delete from the cursor to the end of the next word (Alt+D). */
+inline void edit_delete_next_word(State &l) {
+    size_t end = l.pos;
+    while (end < l.buf.size() && is_word_separator(l.buf[end]))
+        end += edit_next_len(l, end);
+    while (end < l.buf.size() && !is_word_separator(l.buf[end]))
+        end += edit_next_len(l, end);
+    if (end > l.pos) {
+        adjust_folds_after_delete(l, l.pos, end - l.pos);
+        l.buf.erase(l.pos, end - l.pos);
         refresh_line(l);
     }
 }
@@ -2032,11 +2131,11 @@ inline void edit_backspace(State &l) {
 inline void edit_delete_prev_word(State &l) {
     size_t old_pos = l.pos;
 
-    /* Skip spaces before the word (move backwards by clusters). */
-    while (l.pos > 0 && l.buf[l.pos - 1] == ' ')
+    /* Skip blanks before the word (move backwards by clusters). */
+    while (l.pos > 0 && is_word_separator(l.buf[l.pos - 1]))
         l.pos -= edit_prev_len(l, l.pos);
-    /* Skip non-space characters (move backwards by clusters). */
-    while (l.pos > 0 && l.buf[l.pos - 1] != ' ')
+    /* Skip non-blank characters (move backwards by clusters). */
+    while (l.pos > 0 && !is_word_separator(l.buf[l.pos - 1]))
         l.pos -= edit_prev_len(l, l.pos);
     size_t diff = old_pos - l.pos;
     adjust_folds_after_delete(l, l.pos, diff);
@@ -2097,7 +2196,11 @@ inline bool edit_start(State &l, int stdin_fd, int stdout_fd, const char *prompt
     history_add("");
     l.history_entry_active = !history.empty();
 
-    if (write_bytes(l.ofd, l.prompt.data(), l.prompt.size()) == -1) return false;
+    if (!placeholder.empty()) {
+        refresh_line(l); /* Also draws the placeholder. */
+    } else if (write_bytes(l.ofd, l.prompt.data(), l.prompt.size()) == -1) {
+        return false;
+    }
     return true;
 }
 
@@ -2205,6 +2308,115 @@ inline int utf8_seq_len(char c) {
     return 1; /* Invalid encoding, treat as a single byte. */
 }
 
+/* ===================== Reverse incremental search ========================= */
+
+/* Update the search prompt and redraw. */
+inline void search_refresh(State &l) {
+    l.prompt = "(reverse-i-search)`" + l.search_query + "': ";
+    refresh_line(l);
+}
+
+/* Look for the query in the history, from index 'from' going backwards
+ * (towards older entries). On a match the buffer shows the entry with the
+ * cursor at the match. */
+inline void search_find(State &l, int from) {
+    if (from >= static_cast<int>(history.size()))
+        from = static_cast<int>(history.size()) - 1;
+    for (int i = from; i >= 0; i--) {
+        size_t off = history[static_cast<size_t>(i)].find(l.search_query);
+        if (off != std::string::npos) {
+            l.search_found = i;
+            l.buf = history[static_cast<size_t>(i)];
+            l.pos = off;
+            fold_clear(l);
+            return;
+        }
+    }
+    beep();
+}
+
+/* Enter search mode (Ctrl-R). */
+inline void search_start(State &l) {
+    l.searching = true;
+    l.search_query.clear();
+    l.search_found = -1;
+    l.search_saved_buf = l.buf;
+    l.search_saved_pos = l.pos;
+    l.search_saved_prompt = l.prompt;
+    search_refresh(l);
+}
+
+/* Leave search mode, optionally restoring the pre-search buffer. */
+inline void search_stop(State &l, bool restore) {
+    l.prompt = l.search_saved_prompt;
+    l.searching = false;
+    if (restore) {
+        l.buf = l.search_saved_buf;
+        l.pos = l.search_saved_pos;
+        fold_clear(l);
+    }
+    refresh_line(l);
+}
+
+/* Handle one input byte while searching. Returns true when the byte was
+ * consumed; false when the search was closed and the byte still needs
+ * normal processing (so ENTER submits the match, arrows edit it, etc.). */
+inline bool search_feed(State &l, char c) {
+    auto uc = static_cast<unsigned char>(c);
+
+    if (c == CTRL_R) { /* Next (older) match. */
+        if (!l.search_query.empty())
+            search_find(l, l.search_found == -1
+                               ? static_cast<int>(history.size()) - 2
+                               : l.search_found - 1);
+        search_refresh(l);
+        return true;
+    }
+    if (c == BACKSPACE || c == CTRL_H) {
+        if (!l.search_query.empty()) {
+            size_t g = unicode::prev_grapheme_len(l.search_query.data(),
+                                                  l.search_query.size());
+            l.search_query.resize(l.search_query.size() - g);
+            l.search_found = -1;
+            if (!l.search_query.empty()) {
+                search_find(l, static_cast<int>(history.size()) - 2);
+            } else {
+                l.buf = l.search_saved_buf;
+                l.pos = l.search_saved_pos;
+            }
+        }
+        search_refresh(l);
+        return true;
+    }
+    if (c == CTRL_G) { /* Abort: restore the original line. */
+        search_stop(l, true);
+        return true;
+    }
+    if (uc >= 32 && uc != BACKSPACE) { /* Printable or UTF-8 lead byte. */
+        char utf8[4];
+        int utf8len = utf8_seq_len(c);
+        utf8[0] = c;
+        for (int i = 1; i < utf8len; i++) {
+            if (read_byte(l.ifd, utf8 + i) != 1) {
+                utf8len = i;
+                break;
+            }
+        }
+        l.search_query.append(utf8, static_cast<size_t>(utf8len));
+        /* Keep the current match if it still contains the longer query,
+         * otherwise continue towards older entries. */
+        search_find(l, l.search_found == -1
+                           ? static_cast<int>(history.size()) - 2
+                           : l.search_found);
+        search_refresh(l);
+        return true;
+    }
+    /* Any other control key closes the search; the key is then processed
+     * normally against the matched line. */
+    search_stop(l, false);
+    return false;
+}
+
 /* Process one unit of input. Returns EditResult::More while the user is
  * still editing; on EditResult::Done the completed line is stored in
  * 'result'. */
@@ -2224,6 +2436,10 @@ inline EditResult edit_feed(State &l, std::string &result) {
     } else if (nread == 0) {
         return EditResult::Eof;
     }
+
+    /* Reverse incremental search consumes most keys; the ones it does not
+     * consume close the search and are processed normally below. */
+    if (l.searching && search_feed(l, c)) return EditResult::More;
 
     /* Only autocomplete when the callback is set. complete_line() returns
      * the character to be handled next, or zero when the key was consumed
@@ -2327,6 +2543,23 @@ inline EditResult edit_feed(State &l, std::string &result) {
             if (newline_conventions & kNewlineAltEnter) edit_insert(l, "\n", 1);
             break;
         }
+        /* Alt+key word shortcuts. */
+        if (seq[0] == 'b' || seq[0] == 'B') { /* Alt+B: word left */
+            edit_move_word_left(l);
+            break;
+        }
+        if (seq[0] == 'f' || seq[0] == 'F') { /* Alt+F: word right */
+            edit_move_word_right(l);
+            break;
+        }
+        if (seq[0] == 'd' || seq[0] == 'D') { /* Alt+D: delete next word */
+            edit_delete_next_word(l);
+            break;
+        }
+        if (seq[0] == BACKSPACE || seq[0] == CTRL_H) { /* Alt+Backspace */
+            edit_delete_prev_word(l);
+            break;
+        }
         /* Read one more byte to complete the sequence. Two separate calls
          * handle slow terminals returning the chars at different times. */
         if (read_byte(l.ifd, seq + 1) != 1) break;
@@ -2342,7 +2575,7 @@ inline EditResult edit_feed(State &l, std::string &result) {
                 while (plen < sizeof(param)) {
                     char p;
                     if (read_byte(l.ifd, &p) != 1) break;
-                    if (p >= '0' && p <= '9') {
+                    if ((p >= '0' && p <= '9') || p == ';') {
                         param[plen++] = p;
                     } else {
                         final_byte = p;
@@ -2354,6 +2587,30 @@ inline EditResult edit_feed(State &l, std::string &result) {
                         edit_delete(l); /* Delete key. */
                     } else if (plen == 3 && memcmp(param, "200", 3) == 0) {
                         edit_paste(l);
+                    }
+                } else {
+                    /* Modified keys, e.g. Ctrl+Right = ESC [1;5C. Any
+                     * modified Left/Right moves by word; the other keys
+                     * keep their plain meaning. */
+                    switch (final_byte) {
+                    case 'C': /* Ctrl/Alt/Shift+Right */
+                        edit_move_word_right(l);
+                        break;
+                    case 'D': /* Ctrl/Alt/Shift+Left */
+                        edit_move_word_left(l);
+                        break;
+                    case 'A': /* modified Up */
+                        if (!edit_move_up(l)) edit_history_next(l, kHistoryPrev);
+                        break;
+                    case 'B': /* modified Down */
+                        if (!edit_move_down(l)) edit_history_next(l, kHistoryNext);
+                        break;
+                    case 'H': /* modified Home */
+                        edit_move_home(l);
+                        break;
+                    case 'F': /* modified End */
+                        edit_move_end(l);
+                        break;
                     }
                 }
             } else {
@@ -2432,6 +2689,9 @@ inline EditResult edit_feed(State &l, std::string &result) {
         break;
     case CTRL_W: /* ctrl+w, delete previous word */
         edit_delete_prev_word(l);
+        break;
+    case CTRL_R: /* ctrl+r, reverse incremental history search */
+        search_start(l);
         break;
     }
     return EditResult::More;
@@ -2549,6 +2809,12 @@ inline void SetContinuationPrompt(const char *prompt) {
     detail::continuation_prompt = prompt ? prompt : "";
 }
 
+/* Set the placeholder text displayed (dim) after the prompt while the
+ * input buffer is empty (default: none). */
+inline void SetPlaceholder(const char *text) {
+    detail::placeholder = text ? text : "";
+}
+
 /* Enable "mask mode": the terminal displays '*' for every typed character,
  * useful for passwords and other secrets. */
 inline void EnableMaskMode() { detail::mask_mode = true; }
@@ -2603,6 +2869,49 @@ inline void HideLine() {
 inline void ShowLine() {
     if (detail::active_state) detail::show(*detail::active_state);
 }
+
+/* ===================== Non-blocking (async) API =========================== *
+ * For event-driven programs (e.g. printing streamed output while the user
+ * types): start a session, call EditFeed() whenever the input descriptor
+ * is readable (set it to non-blocking mode), and stop the session when
+ * EditFeed() returns something other than EditStatus::More. EditHide()
+ * and EditShow() let the caller print asynchronous output above the
+ * edited line.
+ *
+ *   linenoise::EditState st;
+ *   linenoise::EditStart(st, "> ");
+ *   while (...event loop...) {
+ *       if (input_ready) {
+ *           std::string line;
+ *           auto s = linenoise::EditFeed(st, line);
+ *           if (s == linenoise::EditStatus::More) continue;
+ *           linenoise::EditStop(st);
+ *           if (s == linenoise::EditStatus::Done) use(line);
+ *       }
+ *       if (async_output) {
+ *           linenoise::EditHide(st);
+ *           print(async_output);
+ *           linenoise::EditShow(st);
+ *       }
+ *   }
+ */
+using EditState = detail::State;
+using EditStatus = detail::EditResult;
+
+inline bool EditStart(EditState &st, const char *prompt, int stdin_fd = -1,
+                      int stdout_fd = -1) {
+    return detail::edit_start(st, stdin_fd, stdout_fd, prompt);
+}
+
+inline EditStatus EditFeed(EditState &st, std::string &line) {
+    return detail::edit_feed(st, line);
+}
+
+inline void EditStop(EditState &st) { detail::edit_stop(st); }
+
+inline void EditHide(EditState &st) { detail::hide(st); }
+
+inline void EditShow(EditState &st) { detail::show(st); }
 
 /* Debugging helper: print scan codes on screen for keyboard debugging. */
 inline void PrintKeyCodes() {

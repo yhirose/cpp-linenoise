@@ -26,6 +26,9 @@ Features
  * Multi-line composition for chat-style CLIs: insert newlines with
    Alt+Enter, trailing `\` or trailing space + Enter, or a raw LF from a
    terminal keybind; continuation prompt; Up/Down move between lines.
+ * Reverse incremental history search (Ctrl-R), word-wise navigation
+   (Alt+B/F, Ctrl+arrows), placeholder text, and a non-blocking API for
+   event-driven programs that print output while the user types.
 
 [UAX #29]: https://unicode.org/reports/tr29/
 [UAX #11]: https://unicode.org/reports/tr11/
@@ -49,7 +52,9 @@ Deliberate behavior differences from upstream: Ctrl-C removes the
 temporary history entry instead of leaking it, and a Regional Indicator
 pair (flag emoji) counts as 2 columns rather than 4. The multi-line
 composition features (newline conventions, continuation prompt,
-line-aware Up/Down) are cpp-linenoise extensions not present upstream.
+line-aware Up/Down), reverse incremental search, word-wise
+movement/deletion, and the placeholder are cpp-linenoise extensions not
+present upstream.
 
 Usage
 -----
@@ -138,6 +143,9 @@ void SetNewlineConventions(int mask);
 // Prompt shown before the continuation lines of a multi-line buffer
 void SetContinuationPrompt(const char* prompt);
 
+// Dim placeholder text shown after the prompt while the input is empty
+void SetPlaceholder(const char* text);
+
 // Mask mode: echo '*' instead of the typed characters (for passwords)
 void EnableMaskMode();
 void DisableMaskMode();
@@ -166,6 +174,28 @@ void HideLine(); // temporarily hide the edited line (to print async output)
 void ShowLine(); // show it again
 ```
 
+### Non-blocking API
+
+For event-driven programs (e.g. printing streamed output while the user
+types), drive an editing session manually. Put the input descriptor in
+non-blocking mode and call `EditFeed` whenever it is readable:
+
+```cpp
+linenoise::EditState st;
+linenoise::EditStart(st, "> ");
+for (;;) {
+    // ... wait with poll()/select() ...
+    std::string line;
+    auto s = linenoise::EditFeed(st, line);
+    if (s == linenoise::EditStatus::More) continue;
+    linenoise::EditStop(st);
+    if (s == linenoise::EditStatus::Done) { /* use line */ }
+    break;
+}
+// From elsewhere in the event loop:
+//   linenoise::EditHide(st);  print asynchronous output;  linenoise::EditShow(st);
+```
+
 Key bindings
 ------------
 
@@ -174,6 +204,9 @@ Key bindings
 | Left, Right          | Move cursor by one grapheme cluster           |
 | Up, Down             | Move between lines of a multi-line buffer; history navigation at the first/last line |
 | Ctrl-P, Ctrl-N       | History navigation                            |
+| Ctrl-R               | Reverse incremental history search (Ctrl-G aborts) |
+| Alt-B, Alt-F / Ctrl-Left, Ctrl-Right | Move by word                  |
+| Alt-D, Alt-Backspace | Delete next / previous word                   |
 | Home, End / Ctrl-A, E| Start / end of line                           |
 | Backspace, Delete    | Delete one grapheme cluster                   |
 | Tab                  | Cycle completions (Esc cancels)               |
