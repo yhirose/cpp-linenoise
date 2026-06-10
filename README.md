@@ -23,6 +23,9 @@ Features
  * Everything the original linenoise does: history, tab completion, hints,
    multi-line editing, mask (password) mode, and bracketed paste with
    display folding for large or multi-line pastes.
+ * Multi-line composition for chat-style CLIs: insert newlines with
+   Alt+Enter, trailing `\` or trailing space + Enter, or a raw LF from a
+   terminal keybind; continuation prompt; Up/Down move between lines.
 
 [UAX #29]: https://unicode.org/reports/tr29/
 [UAX #11]: https://unicode.org/reports/tr11/
@@ -44,7 +47,9 @@ two layers are original to this project:
 
 Deliberate behavior differences from upstream: Ctrl-C removes the
 temporary history entry instead of leaking it, and a Regional Indicator
-pair (flag emoji) counts as 2 columns rather than 4.
+pair (flag emoji) counts as 2 columns rather than 4. The multi-line
+composition features (newline conventions, continuation prompt,
+line-aware Up/Down) are cpp-linenoise extensions not present upstream.
 
 Usage
 -----
@@ -118,6 +123,21 @@ std::string Readline(const char* prompt);
 // Multi-line mode (default: single line)
 void SetMultiLine(bool multiLineMode);
 
+// Multi-line composition: choose which conventions insert a newline
+// instead of submitting (plain Enter always submits).
+// Default: NEWLINE_ALT_ENTER | NEWLINE_LF.
+enum NewlineConvention {
+    NEWLINE_ALT_ENTER,       // ESC + CR (Alt+Enter on most terminals)
+    NEWLINE_BACKSLASH_ENTER, // trailing '\' + Enter (the '\' is removed)
+    NEWLINE_SPACE_ENTER,     // trailing space + Enter
+    NEWLINE_LF,              // raw LF: Ctrl-J, or a terminal keybind such
+                             // as Ghostty's "shift+enter=text:\n"
+};
+void SetNewlineConventions(int mask);
+
+// Prompt shown before the continuation lines of a multi-line buffer
+void SetContinuationPrompt(const char* prompt);
+
 // Mask mode: echo '*' instead of the typed characters (for passwords)
 void EnableMaskMode();
 void DisableMaskMode();
@@ -152,7 +172,8 @@ Key bindings
 | Key                  | Action                                        |
 | -------------------- | --------------------------------------------- |
 | Left, Right          | Move cursor by one grapheme cluster           |
-| Up, Down / Ctrl-P, N | History navigation                            |
+| Up, Down             | Move between lines of a multi-line buffer; history navigation at the first/last line |
+| Ctrl-P, Ctrl-N       | History navigation                            |
 | Home, End / Ctrl-A, E| Start / end of line                           |
 | Backspace, Delete    | Delete one grapheme cluster                   |
 | Tab                  | Cycle completions (Esc cancels)               |

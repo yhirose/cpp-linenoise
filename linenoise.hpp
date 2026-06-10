@@ -787,6 +787,22 @@ inline bool atexit_registered = false;
 inline size_t history_max_len = kHistoryDefaultMaxLen;
 inline std::vector<std::string> history;
 
+/* Multi-line composition (cpp-linenoise extension). ENTER submits the
+ * line; the conventions below insert a newline into the buffer instead.
+ * Textual conventions (backslash/space + ENTER) work on every terminal,
+ * including ones where modified Enter keys are indistinguishable from
+ * plain Enter. */
+enum NewlineConventionBits : int {
+    kNewlineAltEnter = 1,       /* ESC + CR (Alt+Enter on most terminals) */
+    kNewlineBackslashEnter = 2, /* '\' just before the cursor + ENTER */
+    kNewlineSpaceEnter = 4,     /* ' ' just before the cursor + ENTER */
+    kNewlineLf = 8,             /* A raw LF byte (Ctrl-J, or a terminal
+                                 * keybind such as Ghostty's
+                                 * "shift+enter=text:\n"). */
+};
+inline int newline_conventions = kNewlineAltEnter | kNewlineLf;
+inline std::string continuation_prompt; /* Shown before continuation lines. */
+
 enum KEY_ACTION {
     KEY_NULL = 0,
     CTRL_A = 1,
@@ -797,6 +813,7 @@ enum KEY_ACTION {
     CTRL_F = 6,
     CTRL_H = 8,
     TAB = 9,
+    CTRL_J = 10,
     CTRL_K = 11,
     CTRL_L = 12,
     ENTER = 13,
@@ -1453,6 +1470,22 @@ inline void adjust_folds_after_delete(State &l, size_t pos, size_t len) {
     }
 }
 
+/* Replace the rendered text with one '*' per grapheme cluster (mask
+ * mode), remapping the cursor position accordingly. Newlines are masked
+ * too, so secrets never influence the screen layout. */
+inline void mask_render(std::string &render, size_t &pos) {
+    size_t clusters = 0, clusters_before = 0, i = 0;
+    while (i < render.size()) {
+        if (i < pos) clusters_before++;
+        size_t step = unicode::next_grapheme_len(render.data(), i, render.size());
+        if (step == 0) break;
+        i += step;
+        clusters++;
+    }
+    render.assign(clusters, '*');
+    pos = clusters_before;
+}
+
 /* Helper of refresh_single_line() and refresh_multi_line() to show hints
  * to the right of the prompt. */
 inline void refresh_show_hints(std::string &ab, State &l, size_t pwidth,
@@ -1503,6 +1536,7 @@ inline void refresh_single_line(State &l, int flags) {
     std::string render;
     size_t pos;
     render_buffer(l, render, pos);
+    if (mask_mode) mask_render(render, pos);
     const char *buf = render.data();
     size_t len = render.size();
 
@@ -1540,18 +1574,7 @@ inline void refresh_single_line(State &l, int flags) {
     if (flags & kRefreshWrite) {
         /* Write the prompt and the current buffer content */
         ab += l.prompt;
-        if (mask_mode) {
-            /* In mask mode, output one '*' per grapheme cluster. */
-            size_t i = 0;
-            while (i < len) {
-                ab += '*';
-                size_t step = unicode::next_grapheme_len(buf, i, len);
-                if (step == 0) break;
-                i += step;
-            }
-        } else {
-            ab.append(buf, len);
-        }
+        ab.append(buf, len);
         /* Show hints if any. */
         refresh_show_hints(ab, l, pwidth, fullwidth);
     }
@@ -1577,15 +1600,55 @@ inline void refresh_single_line(State &l, int flags) {
 inline void refresh_multi_line(State &l, int flags) {
     char seq[64];
     size_t pwidth = unicode::str_width(l.prompt.data(), l.prompt.size());
+    size_t cwidth = unicode::str_width(continuation_prompt.data(),
+                                       continuation_prompt.size());
     std::string render;
     size_t render_pos;
     render_buffer(l, render, render_pos);
-    size_t bufwidth = unicode::str_width(render.data(), render.size());
-    size_t poswidth = unicode::str_width(render.data(), render_pos);
-    int rows = static_cast<int>((pwidth + bufwidth + l.cols - 1) / l.cols);
+    if (mask_mode) mask_render(render, render_pos);
+
+    /* Split the rendered text into logical lines (embedded newlines from
+     * multi-line composition). Each logical line wraps independently; the
+     * first is preceded by the prompt, the others by the continuation
+     * prompt. */
+    struct LineSpan {
+        size_t begin, end;
+    };
+    std::vector<LineSpan> lines;
+    {
+        size_t b = 0;
+        for (size_t i = 0; i < render.size(); i++) {
+            if (render[i] == '\n') {
+                lines.push_back({b, i});
+                b = i + 1;
+            }
+        }
+        lines.push_back({b, render.size()});
+    }
+
+    /* Count the rows used by the rendered buffer and locate the cursor. */
+    int rows = 0;
+    int rpos2 = 1; /* Cursor row after this refresh (1-based). */
+    int col = 0;   /* Cursor column, zero-based. */
+    bool cursor_found = false;
+    for (size_t k = 0; k < lines.size(); k++) {
+        size_t prefix = (k == 0) ? pwidth : cwidth;
+        size_t line_w = unicode::str_width(render.data() + lines[k].begin,
+                                           lines[k].end - lines[k].begin);
+        int line_rows = static_cast<int>((prefix + line_w + l.cols - 1) / l.cols);
+        if (line_rows == 0) line_rows = 1;
+        if (!cursor_found && render_pos >= lines[k].begin &&
+            render_pos <= lines[k].end) {
+            size_t wpos = prefix + unicode::str_width(render.data() + lines[k].begin,
+                                                      render_pos - lines[k].begin);
+            rpos2 = rows + static_cast<int>(wpos / l.cols) + 1;
+            col = static_cast<int>(wpos % l.cols);
+            cursor_found = true;
+        }
+        rows += line_rows;
+    }
+
     int rpos = l.oldrpos; /* Cursor relative row from previous refresh. */
-    int rpos2;            /* rpos after refresh. */
-    int col;              /* Column position, zero-based. */
     int old_rows = static_cast<int>(l.oldrows);
     int fd = l.ofd;
     l.oldrows = static_cast<size_t>(rows);
@@ -1610,38 +1673,31 @@ inline void refresh_multi_line(State &l, int flags) {
     }
 
     if (flags & kRefreshWrite) {
-        /* Write the prompt and the current buffer content */
+        /* Write the prompt and the current buffer content, one logical
+         * line at a time. */
         ab += l.prompt;
-        if (mask_mode) {
-            /* In mask mode, output one '*' per grapheme cluster. */
-            size_t i = 0;
-            while (i < render.size()) {
-                ab += '*';
-                size_t step =
-                    unicode::next_grapheme_len(render.data(), i, render.size());
-                if (step == 0) break;
-                i += step;
+        for (size_t k = 0; k < lines.size(); k++) {
+            if (k > 0) {
+                ab += "\r\n";
+                ab += continuation_prompt;
             }
-        } else {
-            ab += render;
+            ab.append(render, lines[k].begin, lines[k].end - lines[k].begin);
         }
 
-        /* Show hints if any. */
-        refresh_show_hints(ab, l, pwidth, bufwidth);
+        /* Show hints if any (only while the buffer is a single line). */
+        if (lines.size() == 1)
+            refresh_show_hints(ab, l, pwidth,
+                               unicode::str_width(render.data(), render.size()));
 
-        /* If we are at the very end of the screen with our prompt, we need
-         * to emit a newline and move the prompt to the first column. */
-        if (l.pos && render_pos == render.size() &&
-            (poswidth + pwidth) % l.cols == 0) {
-            ab += '\n';
-            ab += '\r';
+        /* If the cursor lands one row past the rows we wrote (it is at
+         * the very end of a line whose display width is an exact multiple
+         * of the terminal width), emit a newline so the terminal scrolls
+         * and the cursor moves to the first column of the next row. */
+        if (cursor_found && rpos2 > rows) {
+            ab += "\n\r";
             rows++;
-            if (rows > static_cast<int>(l.oldrows))
-                l.oldrows = static_cast<size_t>(rows);
+            l.oldrows = static_cast<size_t>(rows);
         }
-
-        /* Move cursor to right position. */
-        rpos2 = static_cast<int>((pwidth + poswidth + l.cols) / l.cols);
 
         /* Go up till we reach the expected position. */
         if (rows - rpos2 > 0) {
@@ -1650,7 +1706,6 @@ inline void refresh_multi_line(State &l, int flags) {
         }
 
         /* Set column. */
-        col = static_cast<int>((pwidth + poswidth) % l.cols);
         if (col) {
             snprintf(seq, 64, "\r\x1b[%dC", col);
             ab += seq;
@@ -1667,9 +1722,20 @@ inline void refresh_multi_line(State &l, int flags) {
 }
 
 /* Calls the two low level functions refresh_single_line() or
- * refresh_multi_line() according to the selected mode. */
+ * refresh_multi_line() according to the selected mode. A buffer holding
+ * embedded newlines (multi-line composition) always uses the multi-line
+ * renderer, regardless of the mode. */
 inline void refresh_line_with_flags(State &l, int flags) {
-    if (ml_mode)
+    bool want_multi = ml_mode || l.buf.find('\n') != std::string::npos;
+    if (!want_multi && l.oldrows > 1) {
+        /* The previous refresh used several rows (the last newline was
+         * just deleted): clean them with the multi-line renderer before
+         * drawing the single-line version. */
+        refresh_multi_line(l, kRefreshClean);
+        l.oldrows = 0;
+        l.oldrpos = 1;
+    }
+    if (want_multi)
         refresh_multi_line(l, flags);
     else
         refresh_single_line(l, flags);
@@ -1846,6 +1912,62 @@ inline void edit_move_end(State &l) {
         l.pos = l.buf.size();
         refresh_line(l);
     }
+}
+
+/* Return the byte position whose display column best matches 'target'
+ * within the logical line [begin,end) of l.buf. */
+inline size_t pos_at_column(State &l, size_t begin, size_t end, size_t target) {
+    size_t i = begin, w = 0;
+    while (i < end) {
+        size_t g = unicode::next_grapheme_len(l.buf.data(), i, end);
+        if (g == 0) break;
+        auto cw = static_cast<size_t>(
+            unicode::single_grapheme_width(l.buf.data() + i, g));
+        if (w + cw > target) break;
+        w += cw;
+        i += g;
+    }
+    return i;
+}
+
+/* Vertical cursor movement inside a multi-line buffer (cpp-linenoise
+ * extension). Returns false when the cursor is already on the first/last
+ * logical line, so callers can fall back to history navigation. Buffers
+ * with display folds keep the plain history behavior. */
+inline bool edit_move_up(State &l) {
+    if (!l.folds.empty() || l.pos == 0) return false;
+    size_t nl = l.buf.rfind('\n', l.pos - 1);
+    if (nl == std::string::npos) return false; /* already on the first line */
+    size_t line_begin = nl + 1;
+    size_t target =
+        unicode::str_width(l.buf.data() + line_begin, l.pos - line_begin);
+    size_t prev_begin = 0;
+    if (nl > 0) {
+        size_t pnl = l.buf.rfind('\n', nl - 1);
+        if (pnl != std::string::npos) prev_begin = pnl + 1;
+    }
+    l.pos = pos_at_column(l, prev_begin, nl, target);
+    refresh_line(l);
+    return true;
+}
+
+inline bool edit_move_down(State &l) {
+    if (!l.folds.empty()) return false;
+    size_t next_nl = l.buf.find('\n', l.pos);
+    if (next_nl == std::string::npos) return false; /* already on the last line */
+    size_t line_begin = 0;
+    if (l.pos > 0) {
+        size_t nl = l.buf.rfind('\n', l.pos - 1);
+        if (nl != std::string::npos) line_begin = nl + 1;
+    }
+    size_t target =
+        unicode::str_width(l.buf.data() + line_begin, l.pos - line_begin);
+    size_t next_begin = next_nl + 1;
+    size_t next_end = l.buf.find('\n', next_begin);
+    if (next_end == std::string::npos) next_end = l.buf.size();
+    l.pos = pos_at_column(l, next_begin, next_end, target);
+    refresh_line(l);
+    return true;
 }
 
 /* Substitute the currently edited line with the next or previous history
@@ -2114,7 +2236,30 @@ inline EditResult edit_feed(State &l, std::string &result) {
     }
 
     switch (c) {
+    case CTRL_J: /* line feed: Ctrl-J, or a terminal that encodes a
+                    modified Enter as a raw LF (e.g. a Ghostty keybind
+                    "shift+enter=text:\n"). */
+        if (newline_conventions & kNewlineLf) {
+            edit_insert(l, "\n", 1);
+            break;
+        }
+        [[fallthrough]];
     case ENTER: /* enter */
+        /* Multi-line composition: the textual conventions below turn
+         * ENTER into a newline insertion instead of a submission. They
+         * work on any terminal, unlike modified Enter keys. */
+        if ((newline_conventions & kNewlineBackslashEnter) && l.pos > 0 &&
+            l.buf[l.pos - 1] == '\\' && !range_overlaps_fold(l, l.pos - 1, 1)) {
+            adjust_folds_after_delete(l, l.pos - 1, 1);
+            l.buf.erase(--l.pos, 1);
+            edit_insert(l, "\n", 1);
+            break;
+        }
+        if ((newline_conventions & kNewlineSpaceEnter) && l.pos > 0 &&
+            l.buf[l.pos - 1] == ' ') {
+            edit_insert(l, "\n", 1);
+            break;
+        }
         edit_drop_history_entry(l);
         if (ml_mode) edit_move_end(l);
         if (hints_callback) {
@@ -2175,10 +2320,15 @@ inline EditResult edit_feed(State &l, std::string &result) {
         edit_history_next(l, kHistoryNext);
         break;
     case ESC: /* escape sequence */
-        /* Read the next two bytes representing the escape sequence. Use two
-         * calls to handle slow terminals returning the two chars at
-         * different times. */
+        /* Read the next byte. Alt+Enter arrives as ESC followed by CR on
+         * most terminals and inserts a newline (multi-line composition). */
         if (read_byte(l.ifd, seq) != 1) break;
+        if (seq[0] == ENTER) {
+            if (newline_conventions & kNewlineAltEnter) edit_insert(l, "\n", 1);
+            break;
+        }
+        /* Read one more byte to complete the sequence. Two separate calls
+         * handle slow terminals returning the chars at different times. */
         if (read_byte(l.ifd, seq + 1) != 1) break;
 
         /* ESC [ sequences. */
@@ -2208,11 +2358,12 @@ inline EditResult edit_feed(State &l, std::string &result) {
                 }
             } else {
                 switch (seq[1]) {
-                case 'A': /* Up */
-                    edit_history_next(l, kHistoryPrev);
+                case 'A': /* Up: move between the lines of a multi-line
+                             buffer, history at the first line. */
+                    if (!edit_move_up(l)) edit_history_next(l, kHistoryPrev);
                     break;
                 case 'B': /* Down */
-                    edit_history_next(l, kHistoryNext);
+                    if (!edit_move_down(l)) edit_history_next(l, kHistoryNext);
                     break;
                 case 'C': /* Right */
                     edit_move_right(l);
@@ -2298,7 +2449,7 @@ inline void edit_stop(State &l) {
 /* Hide the current line. Call Show() to redisplay it. Useful to print
  * asynchronous output without mixing it with the edited line. */
 inline void hide(State &l) {
-    if (ml_mode)
+    if (ml_mode || l.buf.find('\n') != std::string::npos)
         refresh_multi_line(l, kRefreshClean);
     else
         refresh_single_line(l, kRefreshClean);
@@ -2374,6 +2525,28 @@ inline void SetHintsCallback(HintsCallback fn) {
 /* Enable or disable the multi line mode. */
 inline void SetMultiLine(bool multi_line_mode) {
     detail::ml_mode = multi_line_mode;
+}
+
+/* Multi-line composition: pick the conventions that insert a newline into
+ * the buffer instead of submitting the line (bitwise OR). Plain ENTER
+ * always submits. The textual conventions (backslash/space + ENTER) work
+ * on every terminal; NEWLINE_LF supports terminals configured to send a
+ * raw LF for a modified Enter key. */
+enum NewlineConvention : int {
+    NEWLINE_ALT_ENTER = detail::kNewlineAltEnter,
+    NEWLINE_BACKSLASH_ENTER = detail::kNewlineBackslashEnter,
+    NEWLINE_SPACE_ENTER = detail::kNewlineSpaceEnter,
+    NEWLINE_LF = detail::kNewlineLf,
+};
+
+inline void SetNewlineConventions(int mask) {
+    detail::newline_conventions = mask;
+}
+
+/* Set the prompt shown before the continuation lines of a multi-line
+ * buffer (default: none). */
+inline void SetContinuationPrompt(const char *prompt) {
+    detail::continuation_prompt = prompt ? prompt : "";
 }
 
 /* Enable "mask mode": the terminal displays '*' for every typed character,

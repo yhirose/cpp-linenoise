@@ -396,6 +396,113 @@ static void test_edit_wide_line_scroll() {
     CHECK(line == "あいうえおかきくけこさしすせそ");
 }
 
+static void test_newline_conventions() {
+    detail::history.clear();
+    SetNewlineConventions(NEWLINE_ALT_ENTER | NEWLINE_BACKSLASH_ENTER |
+                          NEWLINE_SPACE_ENTER | NEWLINE_LF);
+    SetContinuationPrompt(". ");
+
+    /* Space + Enter inserts a newline; final Enter submits everything. */
+    {
+        EditHarness h("> ", "ab \rcd\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "ab \ncd");
+        /* The continuation prompt must be rendered. */
+        std::string out = h.output();
+        CHECK(out.find("\r\n. ") != std::string::npos);
+    }
+
+    /* Backslash + Enter: the backslash is removed. */
+    {
+        EditHarness h("> ", "ab\\\rcd\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "ab\ncd");
+    }
+
+    /* Alt+Enter (ESC CR). */
+    {
+        EditHarness h("> ", "ab\x1b\rcd\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "ab\ncd");
+    }
+
+    /* Raw LF (Ctrl-J / remapped Shift+Enter). */
+    {
+        EditHarness h("> ", "ab\ncd\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "ab\ncd");
+    }
+
+    /* With NEWLINE_LF disabled, a raw LF submits like Enter. */
+    {
+        SetNewlineConventions(0);
+        EditHarness h("> ", "ab\n");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "ab");
+    }
+
+    /* Backspace across the newline merges the lines and cleans up the
+     * extra row. */
+    {
+        SetNewlineConventions(NEWLINE_LF);
+        EditHarness h("> ", "ab\ncd\x7f\x7f\x7f\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "ab");
+    }
+
+    SetContinuationPrompt("");
+    SetNewlineConventions(NEWLINE_ALT_ENTER | NEWLINE_LF); /* defaults */
+}
+
+static void test_multiline_cursor_movement() {
+    detail::history.clear();
+    AddHistory("old entry");
+    SetNewlineConventions(NEWLINE_LF);
+
+    /* Compose two lines, press Up (into the first line), then type. The
+     * cursor lands at the same display column on the first line. */
+    {
+        EditHarness h("> ", "abcd\nxy\x1b[AZ\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "abZcd\nxy");
+    }
+
+    /* Up on the first line still recalls history. */
+    {
+        EditHarness h("> ", "\x1b[A\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "old entry");
+    }
+
+    /* Down from the first line of a two-line buffer moves to the second
+     * line; target column is clamped to the line length. */
+    {
+        EditHarness h("> ", "abcd\nx\x1b[A\x1b[BZ\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "abcd\nxZ");
+    }
+
+    /* Wide characters: column mapping counts display cells, so moving up
+     * from after "x" (col 4) on line 2 lands after "あい" (col 4). */
+    {
+        EditHarness h("> ", "あいう\nFGHx\x1b[AZ\r");
+        std::string line;
+        CHECK(h.run(line) == detail::EditResult::Done);
+        CHECK(line == "あいZう\nFGHx");
+    }
+
+    SetNewlineConventions(NEWLINE_ALT_ENTER | NEWLINE_LF); /* defaults */
+}
+
 static void test_multiline_mode() {
     detail::history.clear();
     SetMultiLine(true);
@@ -429,6 +536,8 @@ int main() {
     test_edit_mask_mode();
     test_edit_hints();
     test_edit_wide_line_scroll();
+    test_newline_conventions();
+    test_multiline_cursor_movement();
     test_multiline_mode();
 
     printf("%d checks, %d failed\n", tests_run, tests_failed);

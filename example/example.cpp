@@ -8,6 +8,14 @@ int main() {
     // Enable the multi-line mode
     linenoise::SetMultiLine(true);
 
+    // Compose multi-line input with Alt+Enter, trailing '\' or trailing
+    // space + Enter, Ctrl-J, or a terminal keybind sending a raw LF
+    // (e.g. Ghostty's "shift+enter=text:\n")
+    linenoise::SetNewlineConventions(
+        linenoise::NEWLINE_ALT_ENTER | linenoise::NEWLINE_BACKSLASH_ENTER |
+        linenoise::NEWLINE_SPACE_ENTER | linenoise::NEWLINE_LF);
+    linenoise::SetContinuationPrompt("... ");
+
     // Set max length of the history
     linenoise::SetHistoryMaxLen(8);
 
