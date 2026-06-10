@@ -2308,6 +2308,18 @@ inline int utf8_seq_len(char c) {
     return 1; /* Invalid encoding, treat as a single byte. */
 }
 
+/* Assemble the full UTF-8 sequence whose first byte is 'first' into out,
+ * reading the continuation bytes from l.ifd. Returns the number of bytes
+ * gathered (1..4), stopping early on a short read. */
+inline int read_utf8_sequence(State &l, char first, char out[4]) {
+    int len = utf8_seq_len(first);
+    out[0] = first;
+    for (int i = 1; i < len; i++) {
+        if (read_byte(l.ifd, out + i) != 1) return i;
+    }
+    return len;
+}
+
 /* ===================== Reverse incremental search ========================= */
 
 /* Update the search prompt and redraw. */
@@ -2392,16 +2404,9 @@ inline bool search_feed(State &l, char c) {
         search_stop(l, true);
         return true;
     }
-    if (uc >= 32 && uc != BACKSPACE) { /* Printable or UTF-8 lead byte. */
+    if (uc >= 32) { /* Printable or UTF-8 lead byte (controls handled above). */
         char utf8[4];
-        int utf8len = utf8_seq_len(c);
-        utf8[0] = c;
-        for (int i = 1; i < utf8len; i++) {
-            if (read_byte(l.ifd, utf8 + i) != 1) {
-                utf8len = i;
-                break;
-            }
-        }
+        int utf8len = read_utf8_sequence(l, c, utf8);
         l.search_query.append(utf8, static_cast<size_t>(utf8len));
         /* Keep the current match if it still contains the longer query,
          * otherwise continue towards older entries. */
@@ -2655,14 +2660,7 @@ inline EditResult edit_feed(State &l, std::string &result) {
          * of a multi-byte character, read the remaining bytes before
          * inserting. */
         char utf8[4];
-        int utf8len = utf8_seq_len(c);
-        utf8[0] = c;
-        for (int i = 1; i < utf8len; i++) {
-            if (read_byte(l.ifd, utf8 + i) != 1) {
-                utf8len = i;
-                break;
-            }
-        }
+        int utf8len = read_utf8_sequence(l, c, utf8);
         edit_insert(l, utf8, static_cast<size_t>(utf8len));
         break;
     }
