@@ -78,6 +78,7 @@
 #define LINENOISE_HPP
 
 #ifndef _WIN32
+#include <csignal>
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/ioctl.h>
@@ -826,6 +827,7 @@ enum KEY_ACTION {
     CTRL_T = 20,
     CTRL_U = 21,
     CTRL_W = 23,
+    CTRL_Z = 26,
     ESC = 27,
     BACKSPACE = 127
 };
@@ -2422,6 +2424,27 @@ inline bool search_feed(State &l, char c) {
     return false;
 }
 
+#ifndef _WIN32
+/* Ctrl-Z: suspend the process as a normal shell job. Raw mode clears ISIG,
+ * so the terminal driver never turns ^Z into SIGTSTP for us; we do it by
+ * hand. Restore the cooked terminal first (otherwise the shell inherits raw
+ * mode), stop ourselves, and once brought back to the foreground (SIGCONT)
+ * re-enter raw mode and repaint the prompt and the line being edited. */
+inline void edit_suspend(State &l) {
+    int fd = l.ifd;
+    disable_raw_mode(fd);
+    raise(SIGTSTP);
+    /* Execution resumes here after `fg`. */
+    enable_raw_mode(fd);
+    /* The previously drawn rows are gone (the shell scrolled past them), so
+     * forget them and just write the line fresh at the current cursor row
+     * rather than trying to clean rows that no longer exist. */
+    l.oldrows = 0;
+    l.oldrpos = 1;
+    refresh_line_with_flags(l, kRefreshWrite);
+}
+#endif
+
 /* Process one unit of input. Returns EditResult::More while the user is
  * still editing; on EditResult::Done the completed line is stored in
  * 'result'. */
@@ -2688,6 +2711,11 @@ inline EditResult edit_feed(State &l, std::string &result) {
     case CTRL_W: /* ctrl+w, delete previous word */
         edit_delete_prev_word(l);
         break;
+#ifndef _WIN32
+    case CTRL_Z: /* ctrl+z, suspend to the shell (resume with `fg`) */
+        edit_suspend(l);
+        break;
+#endif
     case CTRL_R: /* ctrl+r, reverse incremental history search */
         search_start(l);
         break;
