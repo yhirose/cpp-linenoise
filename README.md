@@ -75,6 +75,17 @@ linenoise::SetCompletionCallback(
         }
     });
 
+// Or, to complete the word under the cursor without touching the rest of the
+// line, use the range-aware overload (it also receives the cursor position):
+linenoise::SetCompletionCallback(
+    [](const char* buf, size_t pos, std::vector<linenoise::Completion>& comps) {
+        size_t start = pos;
+        while (start > 0 && buf[start - 1] != ' ') start--;
+        std::string word(buf + start, pos - start);
+        if (std::string("commit").rfind(word, 0) == 0)  // "commit" starts with word
+            comps.push_back({"commit", start, pos});     // replace [start, pos)
+    });
+
 // Show a hint at the right of the prompt while typing
 linenoise::SetHintsCallback(
     [](const char* editBuffer, int& color, bool& bold) -> std::string {
@@ -150,10 +161,21 @@ void SetPlaceholder(const char* text);
 void EnableMaskMode();
 void DisableMaskMode();
 
-// Completion
+// Completion (whole-line): the selected candidate replaces the entire line
+// and the cursor moves to its end.
 using CompletionCallback =
     std::function<void(const char* editBuffer, std::vector<std::string>& completions)>;
 void SetCompletionCallback(CompletionCallback fn);
+
+// Completion (range-aware): also receives the cursor position 'pos' (a byte
+// offset) and returns candidates that each replace the buffer range
+// [start, end); the cursor lands right after the inserted text. This lets you
+// complete the word under the cursor without disturbing the rest of the line.
+struct Completion { std::string text; size_t start; size_t end; };
+using RangeCompletionCallback =
+    std::function<void(const char* editBuffer, size_t pos,
+                       std::vector<Completion>& completions)>;
+void SetCompletionCallback(RangeCompletionCallback fn);
 
 // Hints shown at the right of the cursor. Return an empty string for no
 // hint; 'color' is an ANSI color code (e.g. 35 = magenta).

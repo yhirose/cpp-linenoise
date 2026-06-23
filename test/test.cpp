@@ -341,6 +341,31 @@ static void test_edit_completion() {
     SetCompletionCallback(nullptr);
 }
 
+static void test_edit_completion_range() {
+    detail::history.clear();
+    /* Range-aware callback: replace just the byte before the cursor, leaving
+     * the suffix after the cursor untouched. */
+    SetCompletionCallback(
+        [](const char *buf, size_t pos, std::vector<linenoise::Completion> &out) {
+            if (pos > 0 && buf[pos - 1] == 'a') out.push_back({"X", pos - 1, pos});
+        });
+
+    /* Type "ab", move the cursor between 'a' and 'b' (Ctrl-B), then TAB +
+     * ENTER. Only "a" is replaced; the suffix "b" is preserved. */
+    EditHarness h("> ", "ab\x02\t\r");
+    std::string line;
+    CHECK(h.run(line) == detail::EditResult::Done);
+    CHECK(line == "Xb");
+
+    /* After accepting, the cursor sits right after the inserted "X": typing
+     * 'Z' lands it between 'X' and 'b'. */
+    EditHarness h2("> ", "ab\x02\tZ\r");
+    std::string line2;
+    CHECK(h2.run(line2) == detail::EditResult::Done);
+    CHECK(line2 == "XZb");
+    SetCompletionCallback(nullptr);
+}
+
 static void test_edit_bracketed_paste_fold() {
     detail::history.clear();
     /* A multi-line bracketed paste is stored verbatim (CRLF normalized to
@@ -673,6 +698,7 @@ int main() {
     test_edit_ctrl_keys();
     test_edit_history_navigation();
     test_edit_completion();
+    test_edit_completion_range();
     test_edit_bracketed_paste_fold();
     test_edit_mask_mode();
     test_edit_hints();

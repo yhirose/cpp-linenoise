@@ -772,13 +772,32 @@ inline constexpr size_t kPasteFoldContext = 8; /* Context chars kept around fold
 inline constexpr size_t kPasteMaxBytes = LINENOISE_MAX_LINE;
 inline constexpr int kMaxFolds = 16;
 
+/* A single tab-completion candidate. The bytes [start, end) of the edit
+ * buffer are replaced with 'text', and the cursor lands right after the
+ * inserted text. This lets a callback complete the word under the cursor
+ * while preserving the rest of the line. */
+struct Completion {
+    std::string text;
+    size_t start = 0;
+    size_t end = 0;
+};
+
+/* Old-style callback: receives the buffer and returns whole-line
+ * replacements (the entire line is replaced and the cursor goes to its
+ * end). Kept for backward compatibility. */
 using CompletionCallbackFn =
     std::function<void(const char *, std::vector<std::string> &)>;
+/* Range-style callback: also receives the cursor position and returns
+ * Completion candidates carrying the buffer range each one replaces. */
+using RangeCompletionCallbackFn =
+    std::function<void(const char *, size_t, std::vector<Completion> &)>;
 using HintsCallbackFn = std::function<std::string(const char *, int &, bool &)>;
 
 /* Mutable library state (C++17 inline variables: one instance program-wide,
- * unlike the per-translation-unit statics of older cpp-linenoise). */
-inline CompletionCallbackFn completion_callback;
+ * unlike the per-translation-unit statics of older cpp-linenoise). The
+ * completion callback is stored in its range-aware form; the old whole-line
+ * API is adapted into it by SetCompletionCallback. */
+inline RangeCompletionCallbackFn completion_callback;
 inline HintsCallbackFn hints_callback;
 inline bool mask_mode = false;
 inline bool ml_mode = false;
@@ -1808,17 +1827,30 @@ inline void refresh_line(State &l) { refresh_line_with_flags(l, kRefreshAll); }
 
 /* ============================== Completion ================================ */
 
+/* Apply a completion to 'buf', producing the resulting text in 'out' and the
+ * cursor byte position in 'out_pos'. The candidate's [start, end) range is
+ * clamped to the buffer so a misbehaving callback cannot corrupt memory. */
+inline void completion_splice(const std::string &buf, const Completion &c,
+                              std::string &out, size_t &out_pos) {
+    size_t start = std::min(c.start, buf.size());
+    size_t end = std::min(std::max(c.end, start), buf.size());
+    out.assign(buf, 0, start);
+    out += c.text;
+    out.append(buf, end, std::string::npos);
+    out_pos = start + c.text.size();
+}
+
 /* Called by complete_line() and Show() to render the current edited line
  * with the proposed completion. If the current completion table is already
  * available, it is passed as second argument, otherwise the callback is
  * used to obtain it. */
 inline void refresh_line_with_completion(State &ls,
-                                         const std::vector<std::string> *lc,
+                                         const std::vector<Completion> *lc,
                                          int flags) {
     /* Obtain the table of completions if the caller didn't provide one. */
-    std::vector<std::string> ctable;
+    std::vector<Completion> ctable;
     if (lc == nullptr) {
-        completion_callback(ls.buf.c_str(), ctable);
+        completion_callback(ls.buf.c_str(), ls.pos, ctable);
         lc = &ctable;
     }
 
@@ -1827,8 +1859,7 @@ inline void refresh_line_with_completion(State &ls,
         std::string saved_buf = std::move(ls.buf);
         size_t saved_pos = ls.pos;
         auto saved_folds = std::move(ls.folds);
-        ls.buf = (*lc)[ls.completion_idx];
-        ls.pos = ls.buf.size();
+        completion_splice(saved_buf, (*lc)[ls.completion_idx], ls.buf, ls.pos);
         ls.folds.clear();
         refresh_line_with_flags(ls, flags);
         ls.buf = std::move(saved_buf);
@@ -1850,10 +1881,10 @@ inline void refresh_line_with_completion(State &ls,
  * complete_line() function to navigate the possible completions, and the
  * caller should read the next character from stdin. */
 inline int complete_line(State &ls, int keypressed) {
-    std::vector<std::string> lc;
+    std::vector<Completion> lc;
     int c = keypressed;
 
-    completion_callback(ls.buf.c_str(), lc);
+    completion_callback(ls.buf.c_str(), ls.pos, lc);
     if (lc.empty()) {
         beep();
         ls.in_completion = false;
@@ -1879,9 +1910,12 @@ inline int complete_line(State &ls, int keypressed) {
         default:
             /* Update buffer and return */
             if (ls.completion_idx < lc.size()) {
-                ls.buf = lc[ls.completion_idx];
-                if (ls.buf.size() > kMaxLine) ls.buf.resize(kMaxLine);
-                ls.pos = ls.buf.size();
+                std::string newbuf;
+                size_t newpos;
+                completion_splice(ls.buf, lc[ls.completion_idx], newbuf, newpos);
+                if (newbuf.size() > kMaxLine) newbuf.resize(kMaxLine);
+                ls.buf = std::move(newbuf);
+                ls.pos = std::min(newpos, ls.buf.size());
                 fold_clear(ls);
             }
             ls.in_completion = false;
@@ -2788,9 +2822,20 @@ inline EditResult edit_line(const char *prompt, std::string &line) {
 
 /* ============================= Public API ================================= */
 
-/* Completion callback: receives the current edit buffer and fills the
- * vector with completion candidates. */
+/* A tab-completion candidate: replace the buffer bytes [start, end) with
+ * 'text'. Use this with the range-aware completion callback to complete the
+ * word under the cursor without disturbing the rest of the line. */
+using Completion = detail::Completion;
+
+/* Completion callback (whole-line): receives the current edit buffer and
+ * fills the vector with candidates; the selected one replaces the entire
+ * line and the cursor moves to its end. */
 using CompletionCallback = detail::CompletionCallbackFn;
+
+/* Completion callback (range-aware): also receives the cursor position
+ * 'pos' (a byte offset) and fills the vector with Completion candidates,
+ * each carrying the buffer range it replaces. */
+using RangeCompletionCallback = detail::RangeCompletionCallbackFn;
 
 /* Hints callback: receives the current edit buffer and returns the hint to
  * display at the right of the cursor (empty string for no hint). 'color'
@@ -2798,9 +2843,31 @@ using CompletionCallback = detail::CompletionCallbackFn;
  * selects bold text. */
 using HintsCallback = detail::HintsCallbackFn;
 
-/* Register a callback function to be called for tab-completion. */
-inline void SetCompletionCallback(CompletionCallback fn) {
+/* Register a range-aware tab-completion callback (sees the cursor position
+ * and returns Completion candidates with their replacement ranges). */
+inline void SetCompletionCallback(RangeCompletionCallback fn) {
     detail::completion_callback = std::move(fn);
+}
+
+/* Register a whole-line tab-completion callback. Adapted into the
+ * range-aware form: each candidate string replaces the whole buffer, which
+ * preserves the historical behavior. */
+inline void SetCompletionCallback(CompletionCallback fn) {
+    detail::completion_callback = [fn = std::move(fn)](
+                                      const char *buf, size_t /*pos*/,
+                                      std::vector<detail::Completion> &out) {
+        std::vector<std::string> strs;
+        fn(buf, strs);
+        size_t len = std::strlen(buf);
+        out.reserve(strs.size());
+        for (auto &s : strs) out.push_back({std::move(s), 0, len});
+    };
+}
+
+/* Clear the completion callback (disambiguates SetCompletionCallback(nullptr)
+ * between the two function-object overloads). */
+inline void SetCompletionCallback(std::nullptr_t) {
+    detail::completion_callback = nullptr;
 }
 
 /* Register a callback function to show hints at the right of the prompt. */
