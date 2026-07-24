@@ -85,13 +85,28 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
-// <termios.h> on some platforms (e.g. macOS) defines CR0/CR1/CR2/CR3 as
-// output CR-delay macros. These are not used in this header and their names
-// collide with unrelated identifiers in other libraries (e.g. LLVM).
+// termios.h defines CR0..CR3, NL0..NL1, TAB0..TAB3, BS0..BS1, FF0..FF1,
+// VT0..VT1 as numeric constants for output-mode delay flags. These names
+// are not part of linenoise's API, but they leak into every translation
+// unit that includes this header and clash with downstream code that
+// uses them as identifiers (e.g. LLVM's ConstantRange.h takes parameters
+// named CR1/CR2). Drop them here so this header doesn't pollute callers.
 #undef CR0
 #undef CR1
 #undef CR2
 #undef CR3
+#undef NL0
+#undef NL1
+#undef TAB0
+#undef TAB1
+#undef TAB2
+#undef TAB3
+#undef BS0
+#undef BS1
+#undef FF0
+#undef FF1
+#undef VT0
+#undef VT1
 #else
 #ifndef NOMINMAX
 #define NOMINMAX
