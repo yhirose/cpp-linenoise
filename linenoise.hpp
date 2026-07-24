@@ -85,6 +85,13 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
+// <termios.h> on some platforms (e.g. macOS) defines CR0/CR1/CR2/CR3 as
+// output CR-delay macros. These are not used in this header and their names
+// collide with unrelated identifiers in other libraries (e.g. LLVM).
+#undef CR0
+#undef CR1
+#undef CR2
+#undef CR3
 #else
 #ifndef NOMINMAX
 #define NOMINMAX
