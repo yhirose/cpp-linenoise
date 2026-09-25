@@ -16,7 +16,7 @@ Features
      combining marks, Hangul jamo and Indic conjuncts as single characters.
    - Correct display widths ([UAX #11] East Asian Width + emoji), so CJK
      text and emoji render and scroll correctly in single and multi line
-     mode. Generated from Unicode 17.0 data.
+     mode. Generated from Unicode 18.0 data.
  * Works in Windows Terminal and the Windows 10+ console through the native
    virtual terminal mode (no ANSI emulation layer; on older consoles it
    degrades to plain line input).

@@ -112,7 +112,8 @@ def main():
 
     cache = args.cache
     version = "unknown"
-    m = re.search(r"Version (\d+\.\d+\.\d+)", fetch(cache, "ReadMe.txt"))
+    m = re.search(r"version (\d+\.\d+\.\d+)", fetch(cache, "ReadMe.txt"),
+                  re.IGNORECASE)
     if m:
         version = m.group(1)
 
