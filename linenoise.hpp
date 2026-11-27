@@ -864,15 +864,6 @@ public:
         }
     }
 
-    /* Drop oldest entries until at most 'n' remain. */
-    void trim_to(size_t n) {
-        while (size_ > n) {
-            head_ = (head_ + 1) % capacity();
-            --size_;
-        }
-        invalidate();
-    }
-
     T &operator[](size_t i) {
         invalidate(); /* a non-const access may modify the entry */
         return slots_[(head_ + i) % capacity()];
@@ -1349,10 +1340,6 @@ inline void beep() {
 }
 
 /* ============================== History =================================== */
-
-/* Drop the oldest entries so that at most 'len' remain. With the ring
- * buffer this only advances the head index -- no entries are shifted. */
-inline void history_trim(size_t len) { history.trim_to(len); }
 
 /* Append an entry. The ring buffer evicts the oldest entry in place when it
  * is full, so no separate trim is needed. The entry is taken by value
