@@ -178,6 +178,26 @@ static void test_history() {
     remove(path);
 }
 
+/* AddHistory() may be given a pointer into the history itself, including
+ * when the history is full and adding drops the oldest entry. */
+static void test_history_readd() {
+    const char *pairs[][2] = {
+        {"a", "b"}, /* stored inside the std::string object */
+        {"the first entry, long enough to be heap allocated",
+         "the second entry, long enough to be heap allocated"},
+    };
+    for (const auto &p : pairs) {
+        detail::history.clear();
+        detail::history_set_max_len(2);
+        AddHistory(p[0]);
+        AddHistory(p[1]);
+        CHECK(AddHistory(GetHistory()[0].c_str()));
+        CHECK(GetHistory()[0] == p[1]);
+        CHECK(GetHistory()[1] == p[0]);
+    }
+    detail::history_set_max_len(100);
+}
+
 /* ====================== In-process editing tests ========================= *
  * Drive the editing engine through pipes. LINENOISE_ASSUME_TTY makes the
  * engine treat them as a terminal; LINENOISE_COLS fixes the width.
@@ -691,6 +711,7 @@ int main() {
     test_grapheme_break_data();
     test_widths();
     test_history();
+    test_history_readd();
     test_edit_basic();
     test_edit_utf8_backspace();
     test_edit_cursor_cluster_movement();

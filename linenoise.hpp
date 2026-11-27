@@ -1242,9 +1242,12 @@ inline bool history_add(const char *line) {
     /* Don't add duplicated lines. */
     if (!history.empty() && history.back() == line) return false;
 
+    /* Copy first: line may point into the history we are about to shift. */
+    std::string entry(line);
+
     /* If we reached the max length, remove the older line. */
     if (history.size() == history_max_len) history.erase(history.begin());
-    history.emplace_back(line);
+    history.push_back(std::move(entry));
     return true;
 }
 
