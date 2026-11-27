@@ -207,13 +207,39 @@ static void test_history_load_over_max_len() {
     for (int i = 0; i < 1000; i++) fprintf(f, "%d\n%d\n", i, i);
     fclose(f);
 
-    std::vector<std::string>().swap(detail::history); /* reset capacity */
+    detail::history.clear(); /* reset the bounded history */
     detail::history_set_max_len(3);
     CHECK(LoadHistory(path));
     CHECK(GetHistory() == (std::vector<std::string>{"997", "998", "999"}));
     CHECK(GetHistory().capacity() < 100);
+    CHECK_EQ(detail::history.capacity(), 3u); /* storage never exceeds max_len */
     detail::history_set_max_len(100);
     remove(path);
+}
+
+/* Wrap-around must keep logical order, bounded storage, and safe re-adds
+ * even after many overwrites of the oldest slot. */
+static void test_history_ring_wrap() {
+    detail::history.clear();
+    detail::history_set_max_len(3);
+    for (int i = 0; i < 100; i++) AddHistory(std::to_string(i).c_str());
+    CHECK(GetHistory() == (std::vector<std::string>{"97", "98", "99"}));
+    CHECK_EQ(detail::history.capacity(), 3u);
+
+    /* A pointer into the logical view stays valid while the ring overwrites
+     * the slot it refers to. */
+    CHECK(AddHistory(GetHistory()[0].c_str()));
+    CHECK(GetHistory() == (std::vector<std::string>{"98", "99", "97"}));
+
+    /* Resizing keeps the newest entries, in order. */
+    detail::history_set_max_len(5);
+    CHECK(GetHistory() == (std::vector<std::string>{"98", "99", "97"}));
+    CHECK_EQ(detail::history.capacity(), 5u);
+    detail::history_set_max_len(2);
+    CHECK(GetHistory() == (std::vector<std::string>{"99", "97"}));
+    CHECK_EQ(detail::history.capacity(), 2u);
+
+    detail::history_set_max_len(100);
 }
 
 /* ====================== In-process editing tests ========================= *
@@ -731,6 +757,7 @@ int main() {
     test_history();
     test_history_readd();
     test_history_load_over_max_len();
+    test_history_ring_wrap();
     test_edit_basic();
     test_edit_utf8_backspace();
     test_edit_cursor_cluster_movement();
