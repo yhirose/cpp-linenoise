@@ -1235,26 +1235,35 @@ inline void beep() {
 
 /* ============================== History =================================== */
 
-/* Add a new entry to the history. Returns true if the line was added. */
-inline bool history_add(const char *line) {
+/* Drop the oldest entries so that at most 'len' remain. */
+inline void history_trim(size_t len) {
+    if (history.size() > len)
+        history.erase(history.begin(), history.end() - len);
+}
+
+/* Append an entry without enforcing the maximum length: the caller must
+ * history_trim() afterwards. The entry is taken by value because the source
+ * may point into the history itself. Returns true if it was appended. */
+inline bool history_push(std::string entry) {
     if (history_max_len == 0) return false;
 
     /* Don't add duplicated lines. */
-    if (!history.empty() && history.back() == line) return false;
+    if (!history.empty() && history.back() == entry) return false;
 
-    /* Copy first: line may point into the history we are about to shift. */
-    std::string entry(line);
-
-    /* If we reached the max length, remove the older line. */
-    if (history.size() == history_max_len) history.erase(history.begin());
     history.push_back(std::move(entry));
+    return true;
+}
+
+/* Add a new entry to the history. Returns true if the line was added. */
+inline bool history_add(const char *line) {
+    if (!history_push(line)) return false;
+    history_trim(history_max_len);
     return true;
 }
 
 inline bool history_set_max_len(size_t len) {
     if (len < 1) return false;
-    if (history.size() > len)
-        history.erase(history.begin(), history.end() - len);
+    history_trim(len);
     history_max_len = len;
     return true;
 }
@@ -1308,8 +1317,12 @@ inline bool history_load(const char *filename) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         /* Rebuild embedded newlines that were saved as CR. */
         std::replace(line.begin(), line.end(), '\r', '\n');
-        history_add(line.c_str());
+        history_push(line.c_str());
+        /* Trimming shifts every retained entry, so do it in batches: once
+         * per line would cost O(lines * max length) on a long file. */
+        if (history.size() / 2 >= history_max_len) history_trim(history_max_len);
     }
+    history_trim(history_max_len);
     return true;
 }
 

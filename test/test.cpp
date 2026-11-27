@@ -198,6 +198,24 @@ static void test_history_readd() {
     detail::history_set_max_len(100);
 }
 
+/* Loading a file much longer than the maximum length keeps the newest
+ * entries, without holding the whole file in the history on the way. */
+static void test_history_load_over_max_len() {
+    const char *path = "test_history_long.tmp";
+    FILE *f = fopen(path, "wb");
+    /* Each line twice: duplicates must still be dropped between trims. */
+    for (int i = 0; i < 1000; i++) fprintf(f, "%d\n%d\n", i, i);
+    fclose(f);
+
+    std::vector<std::string>().swap(detail::history); /* reset capacity */
+    detail::history_set_max_len(3);
+    CHECK(LoadHistory(path));
+    CHECK(GetHistory() == (std::vector<std::string>{"997", "998", "999"}));
+    CHECK(GetHistory().capacity() < 100);
+    detail::history_set_max_len(100);
+    remove(path);
+}
+
 /* ====================== In-process editing tests ========================= *
  * Drive the editing engine through pipes. LINENOISE_ASSUME_TTY makes the
  * engine treat them as a terminal; LINENOISE_COLS fixes the width.
@@ -712,6 +730,7 @@ int main() {
     test_widths();
     test_history();
     test_history_readd();
+    test_history_load_over_max_len();
     test_edit_basic();
     test_edit_utf8_backspace();
     test_edit_cursor_cluster_movement();
